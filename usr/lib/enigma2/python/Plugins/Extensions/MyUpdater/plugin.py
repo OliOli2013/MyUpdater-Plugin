@@ -35,13 +35,24 @@ VER = "V4" # Aktualna wersja zainstalowana
 def show_message_compat(session, message, message_type=MessageBox.TYPE_INFO, timeout=10, on_close=None):
     reactor.callLater(0.2, lambda: session.openWithCallback(on_close, MessageBox, message, message_type, timeout=timeout))
 
+# ZMIANA: Usunięto asynchroniczne otwieranie konsoli, gdy jest już w głównym wątku
 def console_screen_open(session, title, cmds_with_args, callback=None, close_on_finish=False):
     cmds_list = cmds_with_args if isinstance(cmds_with_args, list) else [cmds_with_args]
-    if reactor.running:
-        reactor.callLater(0.1, lambda: session.open(Console, title=title, cmdlist=cmds_list, closeOnSuccess=close_on_finish).onClose.append(callback) if callback else session.open(Console, title=title, cmdlist=cmds_list, closeOnSuccess=close_on_finish))
-    else:
+    # Sprawdź, czy jesteśmy w głównym wątku Twisted
+    is_main_thread = not reactor.running or reactor.callFromThread(lambda: True)
+    
+    def _open_console():
         c_dialog = session.open(Console, title=title, cmdlist=cmds_list, closeOnSuccess=close_on_finish)
-        if callback: c_dialog.onClose.append(callback)
+        if callback:
+            c_dialog.onClose.append(callback)
+
+    if is_main_thread:
+        # Jeśli jesteśmy w głównym wątku, otwórz od razu
+        _open_console()
+    else:
+        # Jeśli nie, użyj reactor.callFromThread
+        reactor.callFromThread(_open_console)
+
 
 def prepare_tmp_dir():
     if not os.path.exists(PLUGIN_TMP_PATH):
@@ -61,7 +72,7 @@ def install_archive(session, title, url, callback_on_finish=None):
     tmp_archive_path = os.path.join(PLUGIN_TMP_PATH, os.path.basename(url))
     download_cmd = "wget --no-check-certificate -O \"{}\" \"{}\"".format(tmp_archive_path, url)
 
-    # Logika dla Picon (zip)
+    # Logika dla Picon (zip) - komunikat bez zmian
     if archive_type == "zip":
         picon_path = "/usr/share/enigma2/picon"
         nested_picon_path = os.path.join(picon_path, "picon")
@@ -71,27 +82,29 @@ def install_archive(session, title, url, callback_on_finish=None):
             "unzip -o -q \"{archive_path}\" -d \"{picon_path}\" && "
             "if [ -d \"{nested_path}\" ]; then mv -f \"{nested_path}\"/* \"{picon_path}/\"; rmdir \"{nested_path}\"; fi && "
             "rm -f \"{archive_path}\" && "
-            "echo 'Picony zostały pomyślnie zainstalowane.' && sleep 3"
+            "echo '>>> Picony zostały pomyślnie zainstalowane.' && sleep 3" # Dodano >>>
         ).format(
             download_cmd=download_cmd,
             archive_path=tmp_archive_path,
             picon_path=picon_path,
             nested_path=nested_picon_path
         )
-    # Logika dla list kanałów (tar.gz) - ZMIENIONA LINIA tar
+    # Logika dla list kanałów (tar.gz) - POPRAWIONY KOMUNIKAT
     else:
         full_command = (
             "{download_cmd} && "
-            # TUTAJ JEST ZMIANA: dodano --strip-components=1
             "tar -xzf \"{archive_path}\" -C /etc/enigma2/ --strip-components=1 && "
             "rm -f \"{archive_path}\" && "
-            "echo 'Lista kanałów została pomyślnie zainstalowana.' && sleep 3"
+            # POPRAWIONY KOMUNIKAT PONIŻEJ
+            "echo '>>> Lista kanałów została pomyślnie zainstalowana.' && sleep 3"
         ).format(
             download_cmd=download_cmd,
             archive_path=tmp_archive_path
         )
 
+    # Otwieramy konsolę od razu, jeśli jesteśmy w głównym wątku
     console_screen_open(session, title, [full_command], callback=callback_on_finish, close_on_finish=True)
+
 
 def _get_s4aupdater_lists_dynamic_sync():
     s4aupdater_list_txt_url = 'http://s4aupdater.one.pl/s4aupdater_list.txt'
@@ -224,8 +237,9 @@ class Fantastic(Screen):
     # --- Implementacje funkcji Menu ---
 
     def runChannelListMenu(self):
-        show_message_compat(self.session, "Pobieranie list (GitHub i S4A)...", timeout=3)
-        self['info'].setText("Pobieranie list...")
+        """ 1. Otwiera okno wyboru list kanałów """
+        # ZMIANA: Usunięto MessageBox, używamy tylko Label 'info'
+        self['info'].setText("Pobieranie list (GitHub i S4A)...")
         thread = Thread(target=self._background_list_loader)
         thread.start()
 
@@ -236,7 +250,7 @@ class Fantastic(Screen):
         reactor.callFromThread(self._onChannelListLoaded, combined_lists)
 
     def _onChannelListLoaded(self, lists):
-        self['info'].setText("Wybierz opcję i naciśnij OK")
+        self['info'].setText("Wybierz opcję i naciśnij OK") # Reset info label
         if not lists:
             show_message_compat(self.session, "Błąd pobierania list. Sprawdź internet.", MessageBox.TYPE_ERROR)
             return
@@ -247,10 +261,15 @@ class Fantastic(Screen):
         try:
             title = choice[0]
             url = choice[1].split(':', 1)[1]
+            # ZMIANA: Pokaż krótką informację przed otwarciem konsoli
+            show_message_compat(self.session, "Rozpoczynanie instalacji listy...", timeout=2)
+            # Wywołanie install_archive (które teraz powinno otworzyć konsolę od razu)
             install_archive(self.session, title, url, callback_on_finish=lambda: reload_settings_python(self.session))
         except Exception as e:
             print("[MyUpdater Mod] Błąd wyboru listy:", e)
             show_message_compat(self.session, "Błąd wyboru listy.", MessageBox.TYPE_ERROR)
+
+    # --- Reszta funkcji bez zmian (Softcam, Picony, Aktualizacja, Info) ---
 
     def runSoftcamMenu(self):
         options = [ ("Oscam (z feedu + fallback Levi45)", "oscam_feed"), ("Oscam (tylko Levi45)", "oscam_levi45"), ("nCam (biko-73)", "ncam_biko") ]
@@ -265,11 +284,15 @@ class Fantastic(Screen):
             """
         elif key == "oscam_levi45": cmd = "wget -q \"--no-check-certificate\" https://raw.githubusercontent.com/levi-45/Levi45Emulator/main/installer.sh -O - | /bin/sh"
         elif key == "ncam_biko": cmd = "wget https://raw.githubusercontent.com/biko-73/Ncam_EMU/main/installer.sh -O - | /bin/sh"
-        if cmd: console_screen_open(self.session, title, [cmd.strip()], close_on_finish=True)
+        if cmd:
+             # Pokaż krótką informację przed otwarciem konsoli
+             show_message_compat(self.session, "Rozpoczynanie instalacji {}...".format(title), timeout=2)
+             console_screen_open(self.session, title, [cmd.strip()], close_on_finish=True)
 
     def runPiconGitHub(self):
         title, PICONS_URL = "Pobieranie Picon (Transparent)", "https://github.com/OliOli2013/PanelAIO-Plugin/raw/main/Picony.zip"
-        show_message_compat(self.session, "Rozpoczynam pobieranie picon...", timeout=3)
+        # ZMIANA: Pokaż krótką informację przed otwarciem konsoli
+        show_message_compat(self.session, "Rozpoczynam pobieranie picon...", timeout=2)
         install_archive(self.session, title, PICONS_URL)
 
     def runPluginUpdate(self):
