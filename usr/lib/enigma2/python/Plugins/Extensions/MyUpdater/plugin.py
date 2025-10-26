@@ -30,7 +30,7 @@ PLUGIN_PATH = os.path.dirname(os.path.realpath(__file__))
 PLUGIN_TMP_PATH = "/tmp/MyUpdater/"
 VER = "V4" # Aktualna wersja zainstalowana
 
-# === FUNKCJE POMOCNICZE (bez zmian) ===
+# === FUNKCJE POMOCNICZE ===
 
 def show_message_compat(session, message, message_type=MessageBox.TYPE_INFO, timeout=10, on_close=None):
     reactor.callLater(0.2, lambda: session.openWithCallback(on_close, MessageBox, message, message_type, timeout=timeout))
@@ -61,6 +61,7 @@ def install_archive(session, title, url, callback_on_finish=None):
     tmp_archive_path = os.path.join(PLUGIN_TMP_PATH, os.path.basename(url))
     download_cmd = "wget --no-check-certificate -O \"{}\" \"{}\"".format(tmp_archive_path, url)
 
+    # Logika dla Picon (zip)
     if archive_type == "zip":
         picon_path = "/usr/share/enigma2/picon"
         nested_picon_path = os.path.join(picon_path, "picon")
@@ -77,10 +78,12 @@ def install_archive(session, title, url, callback_on_finish=None):
             picon_path=picon_path,
             nested_path=nested_picon_path
         )
+    # Logika dla list kanałów (tar.gz) - ZMIENIONA LINIA tar
     else:
         full_command = (
             "{download_cmd} && "
-            "tar -xzf \"{archive_path}\" -C /etc/enigma2/ && "
+            # TUTAJ JEST ZMIANA: dodano --strip-components=1
+            "tar -xzf \"{archive_path}\" -C /etc/enigma2/ --strip-components=1 && "
             "rm -f \"{archive_path}\" && "
             "echo 'Lista kanałów została pomyślnie zainstalowana.' && sleep 3"
         ).format(
@@ -215,10 +218,10 @@ class Fantastic(Screen):
         if callback_key == "menu_lists": self.runChannelListMenu()
         elif callback_key == "menu_softcam": self.runSoftcamMenu()
         elif callback_key == "picons_github": self.runPiconGitHub()
-        elif callback_key == "plugin_update": self.runPluginUpdate() # Zmieniona funkcja
+        elif callback_key == "plugin_update": self.runPluginUpdate()
         elif callback_key == "plugin_info": self.runInfo()
 
-    # --- Implementacje funkcji Menu (bez zmian w tych poniżej, poza runPluginUpdate) ---
+    # --- Implementacje funkcji Menu ---
 
     def runChannelListMenu(self):
         show_message_compat(self.session, "Pobieranie list (GitHub i S4A)...", timeout=3)
@@ -269,98 +272,58 @@ class Fantastic(Screen):
         show_message_compat(self.session, "Rozpoczynam pobieranie picon...", timeout=3)
         install_archive(self.session, title, PICONS_URL)
 
-    # --- NOWA LOGIKA AKTUALIZACJI ---
     def runPluginUpdate(self):
-        """ 4. Sprawdza wersję online i proponuje aktualizację """
         show_message_compat(self.session, "Sprawdzanie dostępności aktualizacji...", timeout=3)
         self['info'].setText("Sprawdzanie wersji online...")
         thread = Thread(target=self._check_version_online)
         thread.start()
 
     def _check_version_online(self):
-        """ Wątek sprawdzający wersję w pliku version.txt na GitHub """
         version_url = "https://raw.githubusercontent.com/OliOli2013/MyUpdater-Plugin/main/version.txt"
         installer_url = "https://raw.githubusercontent.com/OliOli2013/MyUpdater-Plugin/main/installer.sh"
         tmp_version_path = os.path.join(PLUGIN_TMP_PATH, 'version.txt')
-        online_version = None
-        error_msg = None
-
+        online_version, error_msg = None, None
         try:
-            # Używamy -T (timeout) i -t (retries) dla wget
             cmd = "wget --no-check-certificate -q -T 10 -t 2 -O {} {}".format(tmp_version_path, version_url)
             process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            process.communicate() # Czekaj na zakończenie wget
-
+            process.communicate()
             if process.returncode == 0 and os.path.exists(tmp_version_path) and os.path.getsize(tmp_version_path) > 0:
-                with open(tmp_version_path, 'r') as f:
-                    online_version = f.read().strip()
-            else:
-                error_msg = "Nie udało się pobrać informacji o wersji."
+                with open(tmp_version_path, 'r') as f: online_version = f.read().strip()
+            else: error_msg = "Nie udało się pobrać informacji o wersji."
         except Exception as e:
             print("[MyUpdater Mod] Błąd sprawdzania wersji online:", e)
             error_msg = "Błąd podczas sprawdzania wersji."
-
-        # Usuń tymczasowy plik wersji
-        if os.path.exists(tmp_version_path):
-            os.remove(tmp_version_path)
-
-        # Przekaż wynik do głównego wątku
+        if os.path.exists(tmp_version_path): os.remove(tmp_version_path)
         reactor.callFromThread(self._on_version_check_complete, online_version, installer_url, error_msg)
 
     def _on_version_check_complete(self, online_version, installer_url, error_msg):
-        """ Wywoływane po zakończeniu sprawdzania wersji """
         self['info'].setText("Wybierz opcję i naciśnij OK")
-
         if error_msg:
             show_message_compat(self.session, error_msg, MessageBox.TYPE_ERROR)
             return
-
         if online_version:
-            print("[MyUpdater Mod] Wersja online: '{}', Wersja lokalna: '{}'".format(online_version, VER)) # Debug log
-            # Proste porównanie stringów (zakładamy format V1, V2, V3, V4, V4.1 itp.)
-            # Można rozbudować o bardziej zaawansowane porównanie, jeśli format wersji będzie inny
+            print("[MyUpdater Mod] Wersja online: '{}', Wersja lokalna: '{}'".format(online_version, VER))
             if online_version != VER:
-                # Wersje się różnią, zapytaj o aktualizację
                 message = "Dostępna jest nowa wersja: {}\nTwoja wersja: {}\n\nCzy chcesz zaktualizować teraz?".format(online_version, VER)
-                self.session.openWithCallback(
-                    lambda confirmed: self._doPluginUpdate(installer_url) if confirmed else None,
-                    MessageBox, message, type=MessageBox.TYPE_YESNO, title="Dostępna aktualizacja"
-                )
+                self.session.openWithCallback( lambda confirmed: self._doPluginUpdate(installer_url) if confirmed else None, MessageBox, message, type=MessageBox.TYPE_YESNO, title="Dostępna aktualizacja" )
             else:
-                # Wersje są takie same
                 show_message_compat(self.session, "Używasz najnowszej wersji wtyczki ({}).".format(VER), MessageBox.TYPE_INFO)
         else:
-            # online_version jest None lub pusty - błąd odczytu
              show_message_compat(self.session, "Nie udało się odczytać wersji online.", MessageBox.TYPE_ERROR)
 
     def _doPluginUpdate(self, url):
-        """ Uruchamia proces aktualizacji (bez zmian) """
         cmd = "wget -q -O - {} | /bin/sh".format(url)
         title = "Aktualizacja Wtyczki MyUpdater"
         console_screen_open(self.session, title, [cmd], close_on_finish=True)
 
-    # --- Koniec NOWEJ LOGIKI AKTUALIZACJI ---
-
     def runInfo(self):
-        """ 5. Wyświetla informacje o wtyczce (bez zmian) """
-        info_text = (
-            "MyUpdater (Mod 2025) {}\n\n"
-            "Przebudowa: Paweł Pawełek\n"
-            "(msisystem@t.pl)\n\n"
-            "Wtyczka bazuje na kodzie źródłowym PanelAIO.\n\n"
-            "Oryginalni twórcy MyUpdater:\n"
-            "Sancho, gut"
-        ).format(VER)
+        info_text = ( "MyUpdater (Mod 2025) {}\n\nPrzebudowa: Paweł Pawełek\n(msisystem@t.pl)\n\nWtyczka bazuje na kodzie źródłowym PanelAIO.\n\nOryginalni twórcy MyUpdater:\nSancho, gut" ).format(VER)
         self.session.open(MessageBox, info_text, MessageBox.TYPE_INFO)
 
-# === DEFINICJA PLUGINU (bez zmian) ===
+# === DEFINICJA PLUGINU ===
 
 def main(session, **kwargs):
     session.open(Fantastic)
 
 def Plugins(**kwargs):
-    return [PluginDescriptor(name="MyUpdater",
-                             description="MyUpdater Mod {} (bazuje na PanelAIO)".format(VER),
-                             where = PluginDescriptor.WHERE_PLUGINMENU,
-                             icon = "myupdater.png",
-                             fnc = main)]
+    return [PluginDescriptor(name="MyUpdater", description="MyUpdater Mod {} (bazuje na PanelAIO)".format(VER), where = PluginDescriptor.WHERE_PLUGINMENU, icon = "myupdater.png", fnc = main)]
