@@ -37,7 +37,7 @@ def show_message_compat(session, message, message_type=MessageBox.TYPE_INFO, tim
 
 def console_screen_open(session, title, cmds_with_args, callback=None, close_on_finish=False):
     cmds_list = cmds_with_args if isinstance(cmds_with_args, list) else [cmds_with_args]
-    # Usunięto warunek is_main_thread, reactor.callLater jest bezpieczniejszy
+    # Używamy reactor.callLater dla bezpieczeństwa
     reactor.callLater(0.1, lambda: session.open(Console, title=title, cmdlist=cmds_list, closeOnSuccess=close_on_finish).onClose.append(callback) if callback else session.open(Console, title=title, cmdlist=cmds_list, closeOnSuccess=close_on_finish))
 
 def prepare_tmp_dir():
@@ -47,7 +47,7 @@ def prepare_tmp_dir():
         except OSError as e:
             print("[MyUpdater Mod] Error creating tmp dir:", e)
 
-# PRZYWRÓCONA LOGIKA install_archive z PanelAIO dla tar.gz
+# PRZYWRÓCONA LOGIKA install_archive z --strip-components=1 dla tar.gz
 def install_archive(session, title, url, callback_on_finish=None):
     if not url.endswith((".zip", ".tar.gz", ".tgz")):
         show_message_compat(session, "Nieobsługiwany format archiwum!", message_type=MessageBox.TYPE_ERROR)
@@ -80,7 +80,7 @@ def install_archive(session, title, url, callback_on_finish=None):
     else:
         full_command = (
             "{download_cmd} && "
-            # Używamy --strip-components=1, jak w jednej z poprzednich, działających wersji
+            # Używamy --strip-components=1
             "tar -xzf \"{archive_path}\" -C /etc/enigma2/ --strip-components=1 && "
             "rm -f \"{archive_path}\" && "
             "echo '>>> Lista kanałów została pomyślnie zainstalowana.' && sleep 3"
