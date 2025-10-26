@@ -6,7 +6,7 @@
 #
 from __future__ import print_function
 from __future__ import absolute_import
-from enigma import eDVBDB
+from enigma import eDVBDB # Nadal potrzebne do innych rzeczy, ale nie do przeładowania
 from Screens.Screen import Screen
 from Screens.Console import Console
 from Screens.MessageBox import MessageBox
@@ -35,10 +35,8 @@ VER = "V4" # Aktualna wersja zainstalowana
 def show_message_compat(session, message, message_type=MessageBox.TYPE_INFO, timeout=10, on_close=None):
     reactor.callLater(0.2, lambda: session.openWithCallback(on_close, MessageBox, message, message_type, timeout=timeout))
 
-# ZMIANA: Usunięto asynchroniczne otwieranie konsoli, gdy jest już w głównym wątku
 def console_screen_open(session, title, cmds_with_args, callback=None, close_on_finish=False):
     cmds_list = cmds_with_args if isinstance(cmds_with_args, list) else [cmds_with_args]
-    # Sprawdź, czy jesteśmy w głównym wątku Twisted
     is_main_thread = not reactor.running or reactor.callFromThread(lambda: True)
     
     def _open_console():
@@ -47,10 +45,8 @@ def console_screen_open(session, title, cmds_with_args, callback=None, close_on_
             c_dialog.onClose.append(callback)
 
     if is_main_thread:
-        # Jeśli jesteśmy w głównym wątku, otwórz od razu
         _open_console()
     else:
-        # Jeśli nie, użyj reactor.callFromThread
         reactor.callFromThread(_open_console)
 
 
@@ -61,6 +57,7 @@ def prepare_tmp_dir():
         except OSError as e:
             print("[MyUpdater Mod] Error creating tmp dir:", e)
 
+# ZMIANA: Modyfikacja polecenia tar i callback
 def install_archive(session, title, url, callback_on_finish=None):
     if not url.endswith((".zip", ".tar.gz", ".tgz")):
         show_message_compat(session, "Nieobsługiwany format archiwum!", message_type=MessageBox.TYPE_ERROR)
@@ -72,7 +69,7 @@ def install_archive(session, title, url, callback_on_finish=None):
     tmp_archive_path = os.path.join(PLUGIN_TMP_PATH, os.path.basename(url))
     download_cmd = "wget --no-check-certificate -O \"{}\" \"{}\"".format(tmp_archive_path, url)
 
-    # Logika dla Picon (zip) - komunikat bez zmian
+    # Logika dla Picon (zip) - bez zmian
     if archive_type == "zip":
         picon_path = "/usr/share/enigma2/picon"
         nested_picon_path = os.path.join(picon_path, "picon")
@@ -82,28 +79,37 @@ def install_archive(session, title, url, callback_on_finish=None):
             "unzip -o -q \"{archive_path}\" -d \"{picon_path}\" && "
             "if [ -d \"{nested_path}\" ]; then mv -f \"{nested_path}\"/* \"{picon_path}/\"; rmdir \"{nested_path}\"; fi && "
             "rm -f \"{archive_path}\" && "
-            "echo '>>> Picony zostały pomyślnie zainstalowane.' && sleep 3" # Dodano >>>
+            "echo '>>> Picony zostały pomyślnie zainstalowane.' && sleep 3"
         ).format(
             download_cmd=download_cmd,
             archive_path=tmp_archive_path,
             picon_path=picon_path,
             nested_path=nested_picon_path
         )
-    # Logika dla list kanałów (tar.gz) - POPRAWIONY KOMUNIKAT
+        # Dla piconów nie potrzebujemy specjalnego callbacku
+        final_callback = callback_on_finish
+    # Logika dla list kanałów (tar.gz) - ZMIENIONE POLECENIE tar
     else:
         full_command = (
             "{download_cmd} && "
-            "tar -xzf \"{archive_path}\" -C /etc/enigma2/ --strip-components=1 && "
+            "echo '>>> Rozpakowywanie archiwum listy kanałów (tar -xvzf --overwrite)...' && "
+            # ZMIANA: Dodano 'v' (verbose) i '--overwrite', usunięto '--strip-components' do testów
+            "tar -xvzf \"{archive_path}\" -C /etc/enigma2/ --overwrite && "
+            "echo '>>> Zawartość /etc/enigma2/ PO rozpakowaniu (istotne pliki):' && "
+            "ls -l /etc/enigma2/ | grep -E '(lamedb|bouquets|userbouquet)' || echo 'Nie znaleziono plików list?' && "
+            "echo '>>> Synchronizacja dysku (sync)...' && "
+            "sync && "
             "rm -f \"{archive_path}\" && "
-            # POPRAWIONY KOMUNIKAT PONIŻEJ
-            "echo '>>> Lista kanałów została pomyślnie zainstalowana.' && sleep 3"
+            "echo '>>> Lista kanałów została rozpakowana. Próba przeładowania...' && sleep 2" # Krótszy sleep
         ).format(
             download_cmd=download_cmd,
             archive_path=tmp_archive_path
         )
+        # Użyjemy nowego callbacku do przeładowania przez Webif
+        final_callback = lambda: reload_settings_webif(session)
 
-    # Otwieramy konsolę od razu, jeśli jesteśmy w głównym wątku
-    console_screen_open(session, title, [full_command], callback=callback_on_finish, close_on_finish=True)
+    # Otwieramy konsolę
+    console_screen_open(session, title, [full_command], callback=final_callback, close_on_finish=True)
 
 
 def _get_s4aupdater_lists_dynamic_sync():
@@ -119,7 +125,6 @@ def _get_s4aupdater_lists_dynamic_sync():
              return []
     except Exception:
         return []
-
     try:
         urls_dict, versions_dict = {}, {}
         with open(tmp_list_file, 'r', encoding='utf-8', errors='ignore') as f:
@@ -135,10 +140,8 @@ def _get_s4aupdater_lists_dynamic_sync():
     except Exception as e:
         print("[MyUpdater Mod] Błąd parsowania listy S4aUpdater:", e)
         return []
-
     keywords_to_remove = ['bzyk', 'jakitaki']
     lists = [item for item in lists if not any(keyword in item[0].lower() for keyword in keywords_to_remove)]
-
     return lists
 
 def _get_lists_from_repo_sync():
@@ -150,43 +153,50 @@ def _get_lists_from_repo_sync():
         process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         _, stderr = process.communicate()
         ret_code = process.returncode
-        if ret_code != 0:
-             print("[MyUpdater Mod] Wget error downloading manifest (code {}): {}".format(ret_code, stderr))
-             return []
-        if not (os.path.exists(tmp_json_path) and os.path.getsize(tmp_json_path) > 0):
-            print("[MyUpdater Mod] Błąd pobierania manifest.json: plik pusty lub nie istnieje")
-            return []
+        if ret_code != 0: return []
+        if not (os.path.exists(tmp_json_path) and os.path.getsize(tmp_json_path) > 0): return []
     except Exception as e:
         print("[MyUpdater Mod] Błąd pobierania manifest.json (wyjątek):", e)
         return []
-
     lists_menu = []
     try:
-        with open(tmp_json_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
+        with open(tmp_json_path, 'r', encoding='utf-8') as f: data = json.load(f)
         for item in data:
             menu_title = "{} - {} ({})".format(item.get('name', 'Brak nazwy'), item.get('author', ''), item.get('version', ''))
             action = "archive:{}".format(item.get('url', ''))
-            if item.get('url'):
-                lists_menu.append((menu_title, action))
+            if item.get('url'): lists_menu.append((menu_title, action))
     except Exception as e:
         print("[MyUpdater Mod] Błąd przetwarzania pliku manifest.json:", e)
         return []
-
-    if not lists_menu:
-         print("[MyUpdater Mod] Brak list w repozytorium (manifest pusty?)")
-         return []
+    if not lists_menu: return []
     return lists_menu
 
-def reload_settings_python(session, *args):
-    try:
-        db = eDVBDB.getInstance()
-        db.reloadServicelist()
-        db.reloadBouquets()
-        show_message_compat(session, "Listy kanałów przeładowane.", message_type=MessageBox.TYPE_INFO, timeout=3)
-    except Exception as e:
-        print("[MyUpdater Mod] Błąd podczas przeładowywania list:", e)
-        show_message_compat(session, "Wystąpił błąd podczas przeładowywania list.", message_type=MessageBox.TYPE_ERROR)
+# ZMIANA: Nowa funkcja przeładowania przez Webif
+def reload_settings_webif(session, *args):
+    """ Przeładowuje listy kanałów przez OpenWebif """
+    # Sprawdź, czy OpenWebif jest dostępny (prosty test wget)
+    check_cmd = "wget -q -T 5 -O /dev/null http://127.0.0.1/web/about"
+    reload_cmd = "wget -q -O - http://127.0.0.1/web/servicelistreload?mode=0"
+    
+    def check_finished(exit_code):
+        if exit_code == 0:
+            # OpenWebif wydaje się działać, wyślij polecenie przeładowania
+            console_screen_open(session, "Przeładowywanie list kanałów (WebIF)", [reload_cmd],
+                                callback=lambda: show_message_compat(session, "Listy kanałów przeładowane (WebIF).", timeout=5),
+                                close_on_finish=True)
+        else:
+            # OpenWebif nie odpowiada, poinformuj użytkownika
+            show_message_compat(session, "Błąd: Nie można połączyć się z OpenWebif (http://127.0.0.1) w celu przeładowania list.\nZrestartuj GUI ręcznie.", MessageBox.TYPE_WARNING, timeout=-1) # -1 = bez limitu czasu
+
+    # Uruchom sprawdzanie OpenWebif w tle
+    process = subprocess.Popen(check_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    # Użyj eTimer, aby sprawdzić wynik po krótkim czasie (nie blokując GUI)
+    check_timer = eTimer()
+    # Połącz timer z funkcją lambda, która sprawdzi kod powrotu i wywoła check_finished
+    # Ignorujemy linting dla one_shot=True, bo to poprawny argument
+    check_timer_conn = check_timer.timeout.connect(lambda p=process, cb=check_finished: cb(p.poll())) # pylint: disable=cell-var-from-loop
+    check_timer.start(5500, True) # Sprawdź po 5.5 sekundach (więcej niż timeout wget)
+
 
 # === KONIEC FUNKCJI POMOCNICZYCH ===
 
@@ -205,40 +215,24 @@ class Fantastic(Screen):
         self.session = session
         Screen.__init__(self, session)
         self.setTitle("MyUpdater")
-
-        mainmenu = []
-        mainmenu.append( ("1. Listy kanałów", "menu_lists") )
-        mainmenu.append( ("2. Instaluj Softcam", "menu_softcam") )
-        mainmenu.append( ("3. Pobierz Picony Transparent", "picons_github") )
-        mainmenu.append( ("4. Aktualizacja Wtyczki", "plugin_update") )
-        mainmenu.append( ("5. Informacja o Wtyczce", "plugin_info") )
-
+        mainmenu = [ ("1. Listy kanałów", "menu_lists"), ("2. Instaluj Softcam", "menu_softcam"), ("3. Pobierz Picony Transparent", "picons_github"), ("4. Aktualizacja Wtyczki", "plugin_update"), ("5. Informacja o Wtyczce", "plugin_info") ]
         self['menu'] = MenuList(mainmenu)
         self['info'] = Label("Wybierz opcję i naciśnij OK")
         self['version'] = Label("Wersja: " + VER)
-        self['actions'] = ActionMap(['WizardActions', 'DirectionActions'], {
-            'ok': self.runMenuOption,
-            'back': self.close
-        }, -1)
-
+        self['actions'] = ActionMap(['WizardActions', 'DirectionActions'], {'ok': self.runMenuOption, 'back': self.close}, -1)
         prepare_tmp_dir()
 
     def runMenuOption(self):
         selected = self['menu'].l.getCurrentSelection()
         if selected is None: return
         callback_key = selected[1]
-
         if callback_key == "menu_lists": self.runChannelListMenu()
         elif callback_key == "menu_softcam": self.runSoftcamMenu()
         elif callback_key == "picons_github": self.runPiconGitHub()
         elif callback_key == "plugin_update": self.runPluginUpdate()
         elif callback_key == "plugin_info": self.runInfo()
 
-    # --- Implementacje funkcji Menu ---
-
     def runChannelListMenu(self):
-        """ 1. Otwiera okno wyboru list kanałów """
-        # ZMIANA: Usunięto MessageBox, używamy tylko Label 'info'
         self['info'].setText("Pobieranie list (GitHub i S4A)...")
         thread = Thread(target=self._background_list_loader)
         thread.start()
@@ -250,7 +244,7 @@ class Fantastic(Screen):
         reactor.callFromThread(self._onChannelListLoaded, combined_lists)
 
     def _onChannelListLoaded(self, lists):
-        self['info'].setText("Wybierz opcję i naciśnij OK") # Reset info label
+        self['info'].setText("Wybierz opcję i naciśnij OK")
         if not lists:
             show_message_compat(self.session, "Błąd pobierania list. Sprawdź internet.", MessageBox.TYPE_ERROR)
             return
@@ -261,15 +255,12 @@ class Fantastic(Screen):
         try:
             title = choice[0]
             url = choice[1].split(':', 1)[1]
-            # ZMIANA: Pokaż krótką informację przed otwarciem konsoli
             show_message_compat(self.session, "Rozpoczynanie instalacji listy...", timeout=2)
-            # Wywołanie install_archive (które teraz powinno otworzyć konsolę od razu)
-            install_archive(self.session, title, url, callback_on_finish=lambda: reload_settings_python(self.session))
+            # ZMIANA: Callback to nowa funkcja webif
+            install_archive(self.session, title, url, callback_on_finish=lambda: reload_settings_webif(self.session))
         except Exception as e:
             print("[MyUpdater Mod] Błąd wyboru listy:", e)
             show_message_compat(self.session, "Błąd wyboru listy.", MessageBox.TYPE_ERROR)
-
-    # --- Reszta funkcji bez zmian (Softcam, Picony, Aktualizacja, Info) ---
 
     def runSoftcamMenu(self):
         options = [ ("Oscam (z feedu + fallback Levi45)", "oscam_feed"), ("Oscam (tylko Levi45)", "oscam_levi45"), ("nCam (biko-73)", "ncam_biko") ]
@@ -279,19 +270,15 @@ class Fantastic(Screen):
         if not choice: return
         key, title, cmd = choice[1], choice[0], ""
         if key == "oscam_feed":
-            cmd = """
-                echo "Instalowanie/Aktualizowanie Softcam Feed..." && wget -O - -q http://updates.mynonpublic.com/oea/feed | bash && echo "Aktualizuję listę pakietów..." && opkg update && echo "Wyszukuję najlepszą wersję Oscam w feedach..." && PKG_NAME=$(opkg list | grep 'oscam' | grep 'ipv4only' | grep -E -m 1 'master|emu|stable' | cut -d ' ' -f 1) && if [ -n "$PKG_NAME" ]; then echo "Znaleziono pakiet: $PKG_NAME. Rozpoczynam instalację..." && opkg install $PKG_NAME; else echo "Nie znaleziono odpowiedniego pakietu Oscam w feedach. Próbuję instalacji z alternatywnego źródła (Levi45)..." && wget -q "--no-check-certificate" https://raw.githubusercontent.com/levi-45/Levi45Emulator/main/installer.sh -O - | /bin/sh; fi && echo "Instalacja Oscam zakończona." && sleep 3
-            """
+            cmd = """ echo "Instalowanie/Aktualizowanie Softcam Feed..." && wget -O - -q http://updates.mynonpublic.com/oea/feed | bash && echo "Aktualizuję listę pakietów..." && opkg update && echo "Wyszukuję najlepszą wersję Oscam w feedach..." && PKG_NAME=$(opkg list | grep 'oscam' | grep 'ipv4only' | grep -E -m 1 'master|emu|stable' | cut -d ' ' -f 1) && if [ -n "$PKG_NAME" ]; then echo "Znaleziono pakiet: $PKG_NAME. Rozpoczynam instalację..." && opkg install $PKG_NAME; else echo "Nie znaleziono odpowiedniego pakietu Oscam w feedach. Próbuję instalacji z alternatywnego źródła (Levi45)..." && wget -q "--no-check-certificate" https://raw.githubusercontent.com/levi-45/Levi45Emulator/main/installer.sh -O - | /bin/sh; fi && echo "Instalacja Oscam zakończona." && sleep 3 """
         elif key == "oscam_levi45": cmd = "wget -q \"--no-check-certificate\" https://raw.githubusercontent.com/levi-45/Levi45Emulator/main/installer.sh -O - | /bin/sh"
         elif key == "ncam_biko": cmd = "wget https://raw.githubusercontent.com/biko-73/Ncam_EMU/main/installer.sh -O - | /bin/sh"
         if cmd:
-             # Pokaż krótką informację przed otwarciem konsoli
              show_message_compat(self.session, "Rozpoczynanie instalacji {}...".format(title), timeout=2)
              console_screen_open(self.session, title, [cmd.strip()], close_on_finish=True)
 
     def runPiconGitHub(self):
         title, PICONS_URL = "Pobieranie Picon (Transparent)", "https://github.com/OliOli2013/PanelAIO-Plugin/raw/main/Picony.zip"
-        # ZMIANA: Pokaż krótką informację przed otwarciem konsoli
         show_message_compat(self.session, "Rozpoczynam pobieranie picon...", timeout=2)
         install_archive(self.session, title, PICONS_URL)
 
