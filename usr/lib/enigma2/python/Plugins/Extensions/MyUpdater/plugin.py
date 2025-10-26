@@ -29,7 +29,7 @@ from threading import Thread
 PLUGIN_PATH = os.path.dirname(os.path.realpath(__file__))
 # Używamy osobnego folderu tmp, aby nie kolidować z PanelAIO
 PLUGIN_TMP_PATH = "/tmp/MyUpdater/"
-# ZMIENIONA WERSJA ZGODNIE Z PROŚBĄ
+# Wersja wtyczki
 VER = "V4"
 
 # === FUNKCJE POMOCNICZE (bez zmian) ===
@@ -188,7 +188,7 @@ def reload_settings_python(session, *args):
 
 # Główna klasa wtyczki (Menu)
 class Fantastic(Screen):
-    # ZAKTUALIZOWANY SKIN - dodano widget "version"
+    # Zaktualizowany skin - dodano widget "version"
     skin = """
         <screen position="center,center" size="700,400" title="MyUpdater">
             <ePixmap pixmap="/usr/lib/enigma2/python/Plugins/Extensions/MyUpdater/logo.png" position="10,10" size="350,50" alphatest="on" />
@@ -212,7 +212,7 @@ class Fantastic(Screen):
 
         self['menu'] = MenuList(mainmenu)
         self['info'] = Label("Wybierz opcję i naciśnij OK")
-        # DODANO INICJALIZACJĘ NOWEGO WIDGETU WERSJI
+        # Inicjalizacja widgetu wersji
         self['version'] = Label("Wersja: " + VER)
         self['actions'] = ActionMap(['WizardActions', 'DirectionActions'], {
             'ok': self.runMenuOption,
@@ -240,7 +240,7 @@ class Fantastic(Screen):
         elif callback_key == "plugin_info":
             self.runInfo()
 
-    # --- Implementacje funkcji Menu (bez zmian) ---
+    # --- Implementacje funkcji Menu ---
 
     def runChannelListMenu(self):
         """ 1. Otwiera okno wyboru list kanałów """
@@ -348,15 +348,8 @@ class Fantastic(Screen):
     def runPluginUpdate(self):
         """ 4. Aktualizacja wtyczki (prosty instalator) """
 
-        # !!!
-        # !!! TUTAJ WPISZ WŁAŚCIWY LINK DO SKRYPTU instalacyjnego,
-        # !!! gdy już umieścisz wtyczkę na swoim GitHubie.
-        # !!!
-        MY_UPDATE_URL = "https://raw.githubusercontent.com/TWOJA_NAZWA/TWOJE_REPO/main/installer.sh"
-
-        if "TWOJA_NAZWA" in MY_UPDATE_URL:
-            show_message_compat(self.session, "Link aktualizacji nie został jeszcze ustawiony przez autora wtyczki.", MessageBox.TYPE_WARNING)
-            return
+        # ZAKTUALIZOWANY URL
+        MY_UPDATE_URL = "https://raw.githubusercontent.com/OliOli2013/MyUpdater-Plugin/main/installer.sh"
 
         # Pytamy użytkownika o potwierdzenie
         self.session.openWithCallback(
