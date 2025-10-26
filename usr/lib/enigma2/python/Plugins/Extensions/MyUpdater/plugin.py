@@ -6,7 +6,7 @@
 #
 from __future__ import print_function
 from __future__ import absolute_import
-from enigma import eDVBDB # Nadal potrzebne do innych rzeczy, ale nie do przeładowania
+from enigma import eDVBDB # Przywrócono import dla reload_settings_python
 from Screens.Screen import Screen
 from Screens.Console import Console
 from Screens.MessageBox import MessageBox
@@ -37,18 +37,8 @@ def show_message_compat(session, message, message_type=MessageBox.TYPE_INFO, tim
 
 def console_screen_open(session, title, cmds_with_args, callback=None, close_on_finish=False):
     cmds_list = cmds_with_args if isinstance(cmds_with_args, list) else [cmds_with_args]
-    is_main_thread = not reactor.running or reactor.callFromThread(lambda: True)
-    
-    def _open_console():
-        c_dialog = session.open(Console, title=title, cmdlist=cmds_list, closeOnSuccess=close_on_finish)
-        if callback:
-            c_dialog.onClose.append(callback)
-
-    if is_main_thread:
-        _open_console()
-    else:
-        reactor.callFromThread(_open_console)
-
+    # Usunięto warunek is_main_thread, reactor.callLater jest bezpieczniejszy
+    reactor.callLater(0.1, lambda: session.open(Console, title=title, cmdlist=cmds_list, closeOnSuccess=close_on_finish).onClose.append(callback) if callback else session.open(Console, title=title, cmdlist=cmds_list, closeOnSuccess=close_on_finish))
 
 def prepare_tmp_dir():
     if not os.path.exists(PLUGIN_TMP_PATH):
@@ -57,7 +47,7 @@ def prepare_tmp_dir():
         except OSError as e:
             print("[MyUpdater Mod] Error creating tmp dir:", e)
 
-# ZMIANA: Modyfikacja polecenia tar i callback
+# PRZYWRÓCONA LOGIKA install_archive z PanelAIO dla tar.gz
 def install_archive(session, title, url, callback_on_finish=None):
     if not url.endswith((".zip", ".tar.gz", ".tgz")):
         show_message_compat(session, "Nieobsługiwany format archiwum!", message_type=MessageBox.TYPE_ERROR)
@@ -86,30 +76,20 @@ def install_archive(session, title, url, callback_on_finish=None):
             picon_path=picon_path,
             nested_path=nested_picon_path
         )
-        # Dla piconów nie potrzebujemy specjalnego callbacku
-        final_callback = callback_on_finish
-    # Logika dla list kanałów (tar.gz) - ZMIENIONE POLECENIE tar
+    # PRZYWRÓCONA Logika dla list kanałów (tar.gz) - prosty tar + strip-components=1
     else:
         full_command = (
             "{download_cmd} && "
-            "echo '>>> Rozpakowywanie archiwum listy kanałów (tar -xvzf --overwrite)...' && "
-            # ZMIANA: Dodano 'v' (verbose) i '--overwrite', usunięto '--strip-components' do testów
-            "tar -xvzf \"{archive_path}\" -C /etc/enigma2/ --overwrite && "
-            "echo '>>> Zawartość /etc/enigma2/ PO rozpakowaniu (istotne pliki):' && "
-            "ls -l /etc/enigma2/ | grep -E '(lamedb|bouquets|userbouquet)' || echo 'Nie znaleziono plików list?' && "
-            "echo '>>> Synchronizacja dysku (sync)...' && "
-            "sync && "
+            # Używamy --strip-components=1, jak w jednej z poprzednich, działających wersji
+            "tar -xzf \"{archive_path}\" -C /etc/enigma2/ --strip-components=1 && "
             "rm -f \"{archive_path}\" && "
-            "echo '>>> Lista kanałów została rozpakowana. Próba przeładowania...' && sleep 2" # Krótszy sleep
+            "echo '>>> Lista kanałów została pomyślnie zainstalowana.' && sleep 3"
         ).format(
             download_cmd=download_cmd,
             archive_path=tmp_archive_path
         )
-        # Użyjemy nowego callbacku do przeładowania przez Webif
-        final_callback = lambda: reload_settings_webif(session)
 
-    # Otwieramy konsolę
-    console_screen_open(session, title, [full_command], callback=final_callback, close_on_finish=True)
+    console_screen_open(session, title, [full_command], callback=callback_on_finish, close_on_finish=True)
 
 
 def _get_s4aupdater_lists_dynamic_sync():
@@ -171,32 +151,19 @@ def _get_lists_from_repo_sync():
     if not lists_menu: return []
     return lists_menu
 
-# ZMIANA: Nowa funkcja przeładowania przez Webif
-def reload_settings_webif(session, *args):
-    """ Przeładowuje listy kanałów przez OpenWebif """
-    # Sprawdź, czy OpenWebif jest dostępny (prosty test wget)
-    check_cmd = "wget -q -T 5 -O /dev/null http://127.0.0.1/web/about"
-    reload_cmd = "wget -q -O - http://127.0.0.1/web/servicelistreload?mode=0"
-    
-    def check_finished(exit_code):
-        if exit_code == 0:
-            # OpenWebif wydaje się działać, wyślij polecenie przeładowania
-            console_screen_open(session, "Przeładowywanie list kanałów (WebIF)", [reload_cmd],
-                                callback=lambda: show_message_compat(session, "Listy kanałów przeładowane (WebIF).", timeout=5),
-                                close_on_finish=True)
-        else:
-            # OpenWebif nie odpowiada, poinformuj użytkownika
-            show_message_compat(session, "Błąd: Nie można połączyć się z OpenWebif (http://127.0.0.1) w celu przeładowania list.\nZrestartuj GUI ręcznie.", MessageBox.TYPE_WARNING, timeout=-1) # -1 = bez limitu czasu
-
-    # Uruchom sprawdzanie OpenWebif w tle
-    process = subprocess.Popen(check_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    # Użyj eTimer, aby sprawdzić wynik po krótkim czasie (nie blokując GUI)
-    check_timer = eTimer()
-    # Połącz timer z funkcją lambda, która sprawdzi kod powrotu i wywoła check_finished
-    # Ignorujemy linting dla one_shot=True, bo to poprawny argument
-    check_timer_conn = check_timer.timeout.connect(lambda p=process, cb=check_finished: cb(p.poll())) # pylint: disable=cell-var-from-loop
-    check_timer.start(5500, True) # Sprawdź po 5.5 sekundach (więcej niż timeout wget)
-
+# PRZYWRÓCONA funkcja przeładowania z PanelAIO
+def reload_settings_python(session, *args):
+    """ Przeładowuje listy kanałów w Enigma2 używając eDVBDB """
+    try:
+        db = eDVBDB.getInstance()
+        db.reloadServicelist()
+        db.reloadBouquets()
+        # Wywołanie show_message_compat z sesją
+        show_message_compat(session, "Listy kanałów przeładowane.", message_type=MessageBox.TYPE_INFO, timeout=3)
+    except Exception as e:
+        print("[MyUpdater Mod] Błąd podczas przeładowywania list:", e)
+        # Wywołanie show_message_compat z sesją
+        show_message_compat(session, "Wystąpił błąd podczas przeładowywania list.", message_type=MessageBox.TYPE_ERROR)
 
 # === KONIEC FUNKCJI POMOCNICZYCH ===
 
@@ -256,11 +223,13 @@ class Fantastic(Screen):
             title = choice[0]
             url = choice[1].split(':', 1)[1]
             show_message_compat(self.session, "Rozpoczynanie instalacji listy...", timeout=2)
-            # ZMIANA: Callback to nowa funkcja webif
-            install_archive(self.session, title, url, callback_on_finish=lambda: reload_settings_webif(self.session))
+            # PRZYWRÓCONY CALLBACK reload_settings_python
+            install_archive(self.session, title, url, callback_on_finish=lambda: reload_settings_python(self.session))
         except Exception as e:
             print("[MyUpdater Mod] Błąd wyboru listy:", e)
             show_message_compat(self.session, "Błąd wyboru listy.", MessageBox.TYPE_ERROR)
+
+    # --- Reszta funkcji bez zmian (Softcam, Picony, Aktualizacja, Info) ---
 
     def runSoftcamMenu(self):
         options = [ ("Oscam (z feedu + fallback Levi45)", "oscam_feed"), ("Oscam (tylko Levi45)", "oscam_levi45"), ("nCam (biko-73)", "ncam_biko") ]
