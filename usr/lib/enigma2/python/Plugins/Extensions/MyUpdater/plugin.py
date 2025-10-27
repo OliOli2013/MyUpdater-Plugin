@@ -68,7 +68,15 @@ def install_channels(session, archive, finish):
     # universal unpack
     cmd = (
         'echo ">>> Rozpakowuję listę kanałów..." && '
-        'if [[ "{a}" == *.zip ]]; then unzip -o -q "{a}" -d "{t}"; else tar -xzf "{a}" -C "{t}" --strip-components=1 --overwrite; fi && '
+        'TDIR="/tmp/MyUpdater_chlist" && rm -rf "$TDIR" && mkdir -p "$TDIR" && '
+        'if [[ "{a}" == *.zip ]]; then '
+        '    unzip -o -q "{a}" -d "$TDIR" && '
+        '    SUBDIR=$(find "$TDIR" -maxdepth 1 -mindepth 1 -type d | head -n 1) && '
+        '    if [ -n "$SUBDIR" ]; then mv -f "$SUBDIR"/* "{t}"; else mv -f "$TDIR"/* "{t}"; fi && '
+        '    rm -rf "$TDIR"; '
+        'else '
+        '    tar -xzf "{a}" -C "{t}" --strip-components=1 --overwrite; '
+        'fi && '
         'rm -f "{a}" && '
         'echo ">>> Lista zainstalowana."'
     ).format(a=archive, t=target)
