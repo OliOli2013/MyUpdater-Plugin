@@ -34,8 +34,9 @@ LOG_FILE = "/tmp/MyUpdater_install.log" # Plik logu dla instalacji
 # Funkcja logująca do pliku
 def log_message(message):
     try:
+        # Dodano tryb 'a' (append) zamiast domyślnego 'w' (write), aby nie nadpisywać logu przy każdym komunikacie
         with open(LOG_FILE, "a") as f:
-            f.write(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") + " - " + message + "\n")
+            f.write(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") + " - " + str(message) + "\n") # Dodano str() dla pewności
     except Exception as e:
         print("[MyUpdater Mod] Error writing to log file:", e)
 
@@ -47,8 +48,9 @@ def show_message_compat(session, message, message_type=MessageBox.TYPE_INFO, tim
 
 def console_screen_open(session, title, cmds_with_args, callback=None, close_on_finish=False):
     cmds_list = cmds_with_args if isinstance(cmds_with_args, list) else [cmds_with_args]
+    # Usunięto finishedCallback, onClose jest bardziej standardowe
     log_message("Console Open: Title='{}', Cmd='{}'".format(title, "; ".join(cmds_list)))
-    reactor.callLater(0.1, lambda: session.open(Console, title=title, cmdlist=cmds_list, finishedCallback=callback, closeOnSuccess=close_on_finish)) # Używamy finishedCallback zamiast onClose
+    reactor.callLater(0.1, lambda: session.open(Console, title=title, cmdlist=cmds_list, closeOnSuccess=close_on_finish).onClose.append(callback) if callback else session.open(Console, title=title, cmdlist=cmds_list, closeOnSuccess=close_on_finish))
 
 def prepare_tmp_dir():
     if not os.path.exists(PLUGIN_TMP_PATH):
@@ -59,33 +61,42 @@ def prepare_tmp_dir():
             log_message("Error creating tmp dir: {}".format(e))
             print("[MyUpdater Mod] Error creating tmp dir:", e)
 
-# ZMIANA: Usunięto zależność od install_archive_script.sh, dodano logowanie
+# POPRAWIONA funkcja install_archive z BARDZO szczegółowym logowaniem
 def install_archive(session, title, url, callback_on_finish=None):
-    log_message("Starting install_archive for URL: {}".format(url))
+    log_message("--- install_archive START ---")
+    log_message("URL received: {}".format(url))
+    log_message("Title received: {}".format(title))
+
     if not url.endswith((".zip", ".tar.gz", ".tgz")):
-        msg = "Nieobsługiwany format archiwum!"
+        msg = "Nieobsługiwany format archiwum! URL: {}".format(url)
         log_message("Error: " + msg)
         show_message_compat(session, msg, message_type=MessageBox.TYPE_ERROR)
         if callback_on_finish: callback_on_finish()
+        log_message("--- install_archive END (Unsupported format) ---")
         return
 
+    # Określenie typu archiwum
     archive_type = "zip" if url.endswith(".zip") else "tar.gz"
     prepare_tmp_dir()
     tmp_archive_path = os.path.join(PLUGIN_TMP_PATH, os.path.basename(url))
     download_cmd = "wget --no-check-certificate -O \"{}\" \"{}\"".format(tmp_archive_path, url)
-    log_message("Archive type: {}, Temp path: {}".format(archive_type, tmp_archive_path))
+    log_message("Determined archive_type: '{}'".format(archive_type))
+    log_message("Temp archive path: '{}'".format(tmp_archive_path))
 
-    # Logika dla Picon (zip) - bez zmian, dodano logowanie
+    full_command = "" # Zainicjuj pustą komendę
+
+    # Logika dla ZIP (picon)
     if archive_type == "zip":
+        log_message("*** EXECUTING ZIP LOGIC (PICONS) ***") # Logowanie wejścia do bloku ZIP
         picon_path = "/usr/share/enigma2/picon"
-        log_message("Handling ZIP archive for picons, target: {}".format(picon_path))
+        log_message("Target directory (picons): {}".format(picon_path))
         nested_picon_path = os.path.join(picon_path, "picon")
         full_command = (
             "echo '>>> Rozpoczynam pobieranie picon...' && "
             "{download_cmd} && "
             "echo '>>> Tworzenie katalogu picon (jeśli nie istnieje): {picon_path}' && "
             "mkdir -p {picon_path} && "
-            "echo '>>> Rozpakowywanie archiwum picon...' && "
+            "echo '>>> Rozpakowywanie archiwum picon (unzip)...' && " # Wyraźnie wskazano unzip
             "unzip -o -q \"{archive_path}\" -d \"{picon_path}\" && "
             "echo '>>> Sprawdzanie zagnieżdżonego katalogu...' && "
             "if [ -d \"{nested_path}\" ]; then echo '> Przenoszenie z {nested_path} do {picon_path}'; mv -f \"{nested_path}\"/* \"{picon_path}/\"; rmdir \"{nested_path}\"; else echo '> Brak zagnieżdżonego katalogu.'; fi && "
@@ -98,14 +109,15 @@ def install_archive(session, title, url, callback_on_finish=None):
             picon_path=picon_path,
             nested_path=nested_picon_path
         )
-    # NOWA Logika dla list kanałów (tar.gz) - BEZ skryptu zewnętrznego, z logowaniem
-    else:
+    # Logika dla TAR.GZ (listy kanałów)
+    elif archive_type == "tar.gz": # Zmieniono else na elif dla pewności
+        log_message("*** EXECUTING TAR.GZ LOGIC (CHANNEL LISTS) ***") # Logowanie wejścia do bloku TAR.GZ
         target_dir = "/etc/enigma2/"
-        log_message("Handling TAR.GZ archive for channel lists, target: {}".format(target_dir))
+        log_message("Target directory (channel list): {}".format(target_dir))
         full_command = (
             "echo '>>> Rozpoczynam pobieranie listy kanałów...' && "
             "{download_cmd} && "
-            "echo '>>> Rozpakowywanie archiwum listy kanałów do {target_dir}...' && "
+            "echo '>>> Rozpakowywanie archiwum listy kanałów do {target_dir} (tar)...' && " # Wyraźnie wskazano tar
             # Używamy -C {target_dir} i --strip-components=1, dodano -v dla logów
             "tar -xzvf \"{archive_path}\" -C {target_dir} --strip-components=1 --overwrite && "
             "echo '>>> Zawartość {target_dir} PO rozpakowaniu (pliki .tv i lamedb):' && "
@@ -118,10 +130,23 @@ def install_archive(session, title, url, callback_on_finish=None):
             archive_path=tmp_archive_path,
             target_dir=target_dir
         )
+    else:
+        # Ten blok nie powinien być nigdy osiągnięty z powodu sprawdzenia na początku
+        log_message("!!! INTERNAL ERROR: Unknown archive_type '{}'".format(archive_type))
+        show_message_compat(session, "Wewnętrzny błąd - nieznany typ archiwum!", MessageBox.TYPE_ERROR)
+        log_message("--- install_archive END (Internal Error) ---")
+        return
+
+
+    # Logowanie finalnej komendy przed wykonaniem
+    log_message("Final command to be executed: {}".format(full_command))
 
     # Wywołanie konsoli
     console_screen_open(session, title, [full_command], callback=callback_on_finish, close_on_finish=True)
+    log_message("--- install_archive END ---")
 
+
+# --- Reszta funkcji pomocniczych (bez zmian) ---
 
 def _get_s4aupdater_lists_dynamic_sync():
     s4aupdater_list_txt_url = 'http://s4aupdater.one.pl/s4aupdater_list.txt'
@@ -194,7 +219,6 @@ def _get_lists_from_repo_sync():
 
 # Funkcja przeładowania z PanelAIO
 def reload_settings_python(session, *args):
-    """ Przeładowuje listy kanałów w Enigma2 używając eDVBDB """
     log_message("Reloading channel lists using eDVBDB...")
     try:
         db = eDVBDB.getInstance()
@@ -210,7 +234,7 @@ def reload_settings_python(session, *args):
 # === KONIEC FUNKCJI POMOCNICZYCH ===
 
 
-# Główna klasa wtyczki (Menu)
+# Główna klasa wtyczki (Menu) - bez zmian
 class Fantastic(Screen):
     skin = """
         <screen position="center,center" size="700,400" title="MyUpdater">
