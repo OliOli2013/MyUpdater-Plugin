@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-#  MyUpdater  V4  –  Logika instalacji z PanelAIO
+#  MyUpdater  V4  –  Logika instalacji z PanelAIO (Py2/Py3-compatible)
 from __future__ import print_function, absolute_import
 from enigma import eDVBDB
 from Screens.Screen import Screen
@@ -11,6 +11,9 @@ from Components.MenuList import MenuList
 from Components.Label import Label
 from Plugins.Plugin import PluginDescriptor
 from Tools.Directories import fileExists
+
+# Kluczowy import dla kompatybilności Py2/Py3
+import io
 import os, subprocess, json, datetime, traceback
 from twisted.internet import reactor
 from threading import Thread
@@ -22,8 +25,9 @@ LOG_FILE      = "/tmp/MyUpdater_install.log"
 
 def log(msg):
     try:
-        with open(LOG_FILE, "a") as f:
-            f.write("{} - {}\n".format(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), msg))
+        # Używamy io.open dla poprawnej obsługi Unicode w Py2 i Py3
+        with io.open(LOG_FILE, "a", encoding='utf-8') as f:
+            f.write(u"{} - {}\n".format(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), msg))
     except:
         pass
 
@@ -32,13 +36,11 @@ def msg(session, txt, typ=MessageBox.TYPE_INFO, timeout=6):
     reactor.callLater(0.2, lambda: session.open(MessageBox, txt, typ, timeout=timeout))
 
 def console(session, title, cmdlist, onClose, autoClose=True):
-    # Poprawiona linia 35
     log("Console: {} | {}".format(title, " ; ".join(cmdlist)))
     try:
         c = session.open(Console, title=title, cmdlist=cmdlist, closeOnSuccess=autoClose)
         c.onClose.append(onClose)
     except Exception as e:
-        # Poprawiona linia 41
         log("Console exception: " + str(e))
         onClose()
 
@@ -75,8 +77,6 @@ def install_archive(session, title, url, finish=None):
     tmp_archive_path = os.path.join(PLUGIN_TMP_PATH, os.path.basename(url))
     download_cmd = 'wget --no-check-certificate -O "{}" "{}"'.format(tmp_archive_path, url)
     
-    # Logika dla Picon (skopiowana z PanelAIO)
-    # Rozpoznajemy picony po tytule, tak jak w PanelAIO
     if "picon" in title.lower() and archive_type == "zip":
         picon_path = "/usr/share/enigma2/picon"
         nested_picon_path = os.path.join(picon_path, "picon")
@@ -93,14 +93,11 @@ def install_archive(session, title, url, finish=None):
             picon_path=picon_path,
             nested_path=nested_picon_path
         )
-        # Picony nie wymagają przeładowania list, więc callback to 'finish'
         console(session, title, [full_command], onClose=finish, autoClose=True)
     
-    # Logika dla List Kanałów (zip lub tar.gz)
     else:
         install_script_path = os.path.join(PLUGIN_PATH, "install_archive_script.sh")
         
-        # Sprawdzenie czy skrypt istnieje (skopiowane z PanelAIO)
         if not os.path.exists(install_script_path):
              msg(session, "BŁĄD: Brak pliku install_archive_script.sh!", MessageBox.TYPE_ERROR)
              if finish: finish()
@@ -108,7 +105,6 @@ def install_archive(session, title, url, finish=None):
         
         chmod_cmd = "chmod +x \"{}\"".format(install_script_path)
         
-        # Używamy 'bash' do uruchomienia skryptu (skopiowane z PanelAIO)
         full_command = "{download_cmd} && {chmod_cmd} && bash {script} \"{archive_path}\" \"{archive_type}\"".format(
             download_cmd=download_cmd,
             chmod_cmd=chmod_cmd,
@@ -117,11 +113,10 @@ def install_archive(session, title, url, finish=None):
             archive_type=archive_type
         )
         
-        # Tworzymy funkcję zwrotną, która najpierw przeładuje listy, a potem wykona 'finish'
         def combined_callback():
-            reload_settings_python(session) # Najpierw przeładuj
+            reload_settings_python(session) 
             if finish:
-                finish() # Potem wykonaj oryginalny 'finish' (np. pokaż komunikat)
+                finish() 
         
         console(session, title, [full_command], onClose=combined_callback, autoClose=True)
 
@@ -132,7 +127,8 @@ def get_repo_lists():
     lst = []
     try:
         subprocess.check_call("wget --no-check-certificate -q -T 20 -O {} {}".format(tmp, url), shell=True)
-        with open(tmp, 'r') as f:
+        # Używamy io.open dla kompatybilności Py2/Py3
+        with io.open(tmp, 'r', encoding='utf-8') as f:
             data = json.load(f)
         for i in data:
             if i.get('url'):
@@ -149,7 +145,8 @@ def get_s4a_lists():
     try:
         subprocess.check_call("wget --no-check-certificate -q -T 20 -O {} {}".format(tmp, url), shell=True)
         urls, vers = {}, {}
-        with open(tmp, 'r', encoding='utf-8', errors='ignore') as f:
+        # Używamy io.open dla kompatybilności Py2/Py3
+        with io.open(tmp, 'r', encoding='utf-8', errors='ignore') as f:
             for l in f:
                 l = l.strip()
                 if "_url:" in l:
@@ -192,7 +189,7 @@ class Fantastic(Screen):
         if fileExists(LOG_FILE):
             try: os.remove(LOG_FILE)
             except: pass
-        log("MyUpdater Mod {} started".format(VER))
+        log(u"MyUpdater Mod {} started".format(VER))
 
     def runMenuOption(self):
         sel = self["menu"].getCurrent()
@@ -226,14 +223,9 @@ class Fantastic(Screen):
     def runChannelListSelected(self, choice):
         if not choice: return
         title = choice[0]
-        # Bierzemy URL z 'archive:URL'
         url   = choice[1].split(":",1)[1] 
         log("Selected: {} | {}".format(title, url))
-        
-        # Pokaż natychmiastowy komunikat
         msg(self.session, "Rozpoczynam instalację:\n'{}'...".format(title), timeout=5)
-        
-        # Użyj nowej funkcji install_archive
         install_archive(self.session, title, url,
                         finish=lambda: msg(self.session, "Instalacja '{}' zakończona.".format(title), timeout=3))
 
@@ -260,12 +252,9 @@ class Fantastic(Screen):
 
     def runPiconGitHub(self):
         url   = "https://github.com/OliOli2013/PanelAIO-Plugin/raw/main/Picony.zip"
-        # Upewnij się, że tytuł zawiera "Picon", aby nowa funkcja install_archive zadziałała poprawnie
         title = "Pobieranie Picon (Transparent)" 
         log("Picons: " + url)
         msg(self.session, "Rozpoczynam pobieranie picon...", timeout=2)
-        
-        # Użyj nowej funkcji install_archive
         install_archive(self.session, title, url,
                         finish=lambda: msg(self.session, "Picony gotowe.", timeout=3))
 
@@ -281,7 +270,9 @@ class Fantastic(Screen):
         online  = None
         try:
             subprocess.check_call("wget --no-check-certificate -q -T 10 -O {} {}".format(tmp_ver, ver_url), shell=True)
-            with open(tmp_ver, 'r') as f: online = f.read().strip()
+            # Używamy io.open dla kompatybilności Py2/Py3
+            with io.open(tmp_ver, 'r', encoding='utf-8') as f: 
+                online = f.read().strip()
         except:
             pass
         if fileExists(tmp_ver): os.remove(tmp_ver)
@@ -305,10 +296,10 @@ class Fantastic(Screen):
         console(self.session, "Aktualizacja MyUpdater", [cmd], onClose=lambda: None, autoClose=True)
 
     def runInfo(self):
-        txt = ("MyUpdater (Mod 2025) {}\n\n"
-               "Przebudowa: Paweł Pawełek\n"
-               "Wtyczka bazuje na PanelAIO.\n\n"
-               "Oryginał: Sancho, gut").format(VER)
+        txt = (u"MyUpdater (Mod 2025) {}\n\n"
+               u"Przebudowa: Paweł Pawełek\n"
+               u"Wtyczka bazuje na PanelAIO.\n\n"
+               u"Oryginał: Sancho, gut").format(VER)
         self.session.open(MessageBox, txt, MessageBox.TYPE_INFO)
 
 # ----------- plugin entry -----------------------------
