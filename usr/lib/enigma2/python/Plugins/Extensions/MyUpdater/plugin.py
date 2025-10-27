@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-#  MyUpdater  V4  –  always install & return
+#  MyUpdater  V4.4  –  always install & return
 from __future__ import print_function, absolute_import
 from enigma import eDVBDB
 from Screens.Screen import Screen
@@ -17,7 +17,7 @@ from threading import Thread
 
 PLUGIN_PATH   = os.path.dirname(os.path.realpath(__file__))
 PLUGIN_TMP_PATH = "/tmp/MyUpdater/"
-VER           = "V4"
+VER           = "V4.4"
 LOG_FILE      = "/tmp/MyUpdater_install.log"
 
 def log(msg):
@@ -31,11 +31,9 @@ def msg(session, txt, typ=MessageBox.TYPE_INFO, timeout=6):
     log("Msg: " + txt)
     reactor.callLater(0.2, lambda: session.open(MessageBox, txt, typ, timeout=timeout))
 
-# --- POPRAWIONA FUNKCJA 'console' ---
 def console(session, title, cmdlist, onClose, autoClose=True):
     log("Console: {} | {}".format(title, " ; ".join(cmdlist)))
     try:
-        # Używamy 'autoClose' (domyślnie True) zamiast 'False' na stałe
         c = session.open(Console, title=title, cmdlist=cmdlist, closeOnSuccess=autoClose)
         # ‑‑->  ALWAYS run next step  <‑‑-
         c.onClose.append(onClose)
@@ -67,20 +65,32 @@ def detect_type(path):
 # ----------- install channels  (zip OR tar.gz) ------
 def install_channels(session, archive, finish):
     target = "/etc/enigma2/"
-    # universal unpack
+    # --- NOWA, BARDZIEJ ROZBUDOWANA KOMENDA ---
     cmd = (
         'echo ">>> Rozpakowuję listę kanałów..." && '
         'TDIR="/tmp/MyUpdater_chlist" && rm -rf "$TDIR" && mkdir -p "$TDIR" && '
+        
+        # Rozpakuj ZIP lub TAR do TDIR
         'if [[ "{a}" == *.zip ]]; then '
-        '    unzip -o -q "{a}" -d "$TDIR" && '
-        '    SUBDIR=$(find "$TDIR" -maxdepth 1 -mindepth 1 -type d | head -n 1) && '
-        '    if [ -n "$SUBDIR" ]; then mv -f "$SUBDIR"/* "{t}"; else mv -f "$TDIR"/* "{t}"; fi && '
-        '    rm -rf "$TDIR"; '
+        '    unzip -o -q "{a}" -d "$TDIR"; '
         'else '
-        '    tar -xzf "{a}" -C "{t}" --strip-components=1 --overwrite; '
+        '    tar -xzf "{a}" -C "$TDIR"; '
         'fi && '
-        'rm -f "{a}" && '
-        'echo ">>> Lista zainstalowana."'
+        
+        # Sprawdź, czy w ogóle znaleziono jakiekolwiek pliki listy
+        'FILES=$(find "$TDIR" -type f \( -name "lamedb" -o -name "*.tv" -o -name "*.radio" \)) && '
+        
+        'if [ -n "$FILES" ]; then '
+        '    echo ">>> Znaleziono pliki list. Przenoszę..." && '
+        '    find "$TDIR" -type f \( -name "lamedb" -o -name "*.tv" -o -name "*.radio" \) -exec mv -f {{}} "{t}" \; && '
+        '    echo ">>> Pliki przeniesione." && '
+        '    rm -rf "$TDIR" && rm -f "{a}" && '
+        '    echo ">>> Lista zainstalowana."; '
+        'else '
+        '    echo ">>> BŁĄD: Nie znaleziono plików list (lamedb, *.tv) w archiwum!" && '
+        '    rm -rf "$TDIR" && rm -f "{a}" && '
+        '    exit 1; ' # Zwróć błąd, aby konsola pokazała problem
+        'fi'
     ).format(a=archive, t=target)
 
     def _reload():
@@ -94,7 +104,6 @@ def install_channels(session, archive, finish):
         if finish:
             finish()
 
-    # Dodano autoClose=True
     console(session, "Instalacja Listy Kanałów", [cmd], onClose=_reload, autoClose=True)
 
 # ----------- install picons -------------------------
@@ -108,7 +117,6 @@ def install_picons(session, archive, finish):
         'rm -f "{a}" && '
         'echo ">>> Picony gotowe."'
     ).format(p=p, a=archive, n=n)
-    # Dodano autoClose=True
     console(session, "Instalacja Picon", [cmd], onClose=finish, autoClose=True)
 
 # ----------- after download -------------------------
@@ -131,7 +139,6 @@ def install_archive(session, title, url, finish=None):
     tmpdir()
     path = os.path.join(PLUGIN_TMP_PATH, os.path.basename(url))
     cmd  = 'wget --no-check-certificate -O "{}" "{}"'.format(path, url)
-    # Dodano autoClose=True
     console(session, title, [cmd], onClose=lambda: after_download(session, title, path, finish), autoClose=True)
 
 # ----------- sources --------------------------------
@@ -260,7 +267,6 @@ class Fantastic(Screen):
             cmd = "wget -q https://raw.githubusercontent.com/biko-73/Ncam_EMU/main/installer.sh -O- | sh"
         if cmd:
             msg(self.session, "Instaluję {}...".format(title), timeout=2)
-            # --- POPRAWKA BŁĘDU: Dodano brakujący argument 'onClose' ---
             console(self.session, title, [cmd], onClose=lambda: None, autoClose=True)
 
     def runPiconGitHub(self):
@@ -303,7 +309,6 @@ class Fantastic(Screen):
 
     def _doUpdate(self, url):
         cmd = "wget -q -O - {} | /bin/sh".format(url)
-        # --- POPRAWKA BŁĘDU: Dodano brakujący argument 'onClose' ---
         console(self.session, "Aktualizacja MyUpdater", [cmd], onClose=lambda: None, autoClose=True)
 
     def runInfo(self):
