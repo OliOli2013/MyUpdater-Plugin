@@ -2,21 +2,17 @@
 # Instalator/aktualizator MyUpdater Mod V4
 
 # --- Konfiguracja ---
-# Ścieżka docelowa
 PLUGIN_DIR="/usr/lib/enigma2/python/Plugins/Extensions/MyUpdater"
-# URL do folderu pluginu na GitHub (Raw content)
-# ZAKTUALIZOWANY URL
 GITHUB_RAW_URL="https://raw.githubusercontent.com/OliOli2013/MyUpdater-Plugin/main/usr/lib/enigma2/python/Plugins/Extensions/MyUpdater"
+REQUIRED_PKGS="wget curl tar unzip bash" # Dodano bash
 
-# Lista wymaganych pakietów
-REQUIRED_PKGS="wget curl tar unzip"
-
-# Pliki do pobrania i ich nazwy docelowe
+# Pliki do pobrania (w tym skrypt pomocniczy)
 FILES_TO_DOWNLOAD="
 plugin.py
 logo.png
 myupdater.png
 __init__.py
+install_archive_script.sh
 "
 # --- Koniec Konfiguracji ---
 
@@ -29,9 +25,7 @@ echo ""
 echo ">>> Sprawdzanie zależności..."
 MISSING_PKGS=""
 for PKG in $REQUIRED_PKGS; do
-    # Sprawdź czy komenda istnieje
     if ! command -v $PKG > /dev/null 2>&1; then
-        # Sprawdź czy pakiet jest zainstalowany (alternatywna metoda)
         if ! opkg list-installed | grep -q "^$PKG "; then
             echo "  > Brak pakietu: $PKG"
             MISSING_PKGS="$MISSING_PKGS $PKG"
@@ -50,15 +44,12 @@ if [ -n "$MISSING_PKGS" ]; then
     opkg update
     echo "> Instalowanie pakietów..."
     opkg install $MISSING_PKGS
-
-    # Ponowne sprawdzenie po instalacji
     RECHECK_MISSING=""
     for PKG in $MISSING_PKGS; do
         if ! command -v $PKG > /dev/null 2>&1 && ! opkg list-installed | grep -q "^$PKG "; then
             RECHECK_MISSING="$RECHECK_MISSING $PKG"
         fi
     done
-
     if [ -n "$RECHECK_MISSING" ]; then
         echo ""
         echo "!!! BŁĄD: Nie udało się zainstalować następujących pakietów:$RECHECK_MISSING"
@@ -84,7 +75,6 @@ echo ">>> Pobieranie plików wtyczki..."
 SUCCESS=true
 for FILE in $FILES_TO_DOWNLOAD; do
     echo "  > Pobieranie $FILE..."
-    # Używamy -q (quiet) dla wget i sprawdzamy kod wyjścia ($?)
     wget -q "$GITHUB_RAW_URL/$FILE" -O "$PLUGIN_DIR/$FILE"
     if [ $? -ne 0 ]; then
         echo "  !!! BŁĄD podczas pobierania $FILE"
@@ -102,8 +92,9 @@ fi
 
 # --- Nadawanie uprawnień ---
 echo ""
-echo ">>> Ustawianie uprawnień dla plików wtyczki (644)..."
-chmod 644 "$PLUGIN_DIR"/*
+echo ">>> Ustawianie uprawnień dla plików wtyczki..."
+chmod 644 "$PLUGIN_DIR"/*.png "$PLUGIN_DIR"/*.py # Uprawnienia dla .png i .py
+chmod +x "$PLUGIN_DIR/install_archive_script.sh" # Nadanie uprawnień wykonywania dla skryptu
 # --- Koniec nadawania uprawnień ---
 
 # --- Czyszczenie starych plików .pyo ---
