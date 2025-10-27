@@ -25,7 +25,9 @@ echo ""
 echo ">>> Sprawdzanie zależności..."
 MISSING_PKGS=""
 for PKG in $REQUIRED_PKGS; do
+    # Sprawdź czy komenda istnieje
     if ! command -v $PKG > /dev/null 2>&1; then
+        # Sprawdź czy pakiet jest zainstalowany (alternatywna metoda)
         if ! opkg list-installed | grep -q "^$PKG "; then
             echo "  > Brak pakietu: $PKG"
             MISSING_PKGS="$MISSING_PKGS $PKG"
@@ -75,8 +77,10 @@ echo ">>> Pobieranie plików wtyczki..."
 SUCCESS=true
 for FILE in $FILES_TO_DOWNLOAD; do
     echo "  > Pobieranie $FILE..."
+    # Używamy -q (quiet) dla wget i sprawdzamy kod wyjścia ($?)
     wget -q "$GITHUB_RAW_URL/$FILE" -O "$PLUGIN_DIR/$FILE"
     if [ $? -ne 0 ]; then
+        # Wyświetl błąd dla konkretnego pliku
         echo "  !!! BŁĄD podczas pobierania $FILE"
         SUCCESS=false
     fi
