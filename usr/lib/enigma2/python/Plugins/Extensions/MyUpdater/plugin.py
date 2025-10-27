@@ -6,7 +6,7 @@
 #
 from __future__ import print_function
 from __future__ import absolute_import
-from enigma import eDVBDB # Przywrócono import dla reload_settings_python
+from enigma import eDVBDB
 from Screens.Screen import Screen
 from Screens.Console import Console
 from Screens.MessageBox import MessageBox
@@ -37,7 +37,6 @@ def show_message_compat(session, message, message_type=MessageBox.TYPE_INFO, tim
 
 def console_screen_open(session, title, cmds_with_args, callback=None, close_on_finish=False):
     cmds_list = cmds_with_args if isinstance(cmds_with_args, list) else [cmds_with_args]
-    # Używamy reactor.callLater dla bezpieczeństwa
     reactor.callLater(0.1, lambda: session.open(Console, title=title, cmdlist=cmds_list, closeOnSuccess=close_on_finish).onClose.append(callback) if callback else session.open(Console, title=title, cmdlist=cmds_list, closeOnSuccess=close_on_finish))
 
 def prepare_tmp_dir():
@@ -47,17 +46,18 @@ def prepare_tmp_dir():
         except OSError as e:
             print("[MyUpdater Mod] Error creating tmp dir:", e)
 
-# PRZYWRÓCONA LOGIKA install_archive z --strip-components=1 dla tar.gz
+# PRZYWRÓCONA DOKŁADNIE logika install_archive z PanelAIO
 def install_archive(session, title, url, callback_on_finish=None):
-    if not url.endswith((".zip", ".tar.gz", ".tgz")):
-        show_message_compat(session, "Nieobsługiwany format archiwum!", message_type=MessageBox.TYPE_ERROR)
+    # Sprawdzenie formatu (tak jak w PanelAIO, obsługuje też .ipk, ale my go nie używamy)
+    if not url.endswith((".zip", ".tar.gz", ".tgz", ".ipk")): #
+        show_message_compat(session, "Nieobsługiwany format archiwum!", message_type=MessageBox.TYPE_ERROR) #
         if callback_on_finish: callback_on_finish()
         return
-
-    archive_type = "zip" if url.endswith(".zip") else "tar.gz"
+    # Rozpoznanie typu archiwum
+    archive_type = "zip" if url.endswith(".zip") else ("tar.gz" if url.endswith((".tar.gz", ".tgz")) else "ipk")
     prepare_tmp_dir()
-    tmp_archive_path = os.path.join(PLUGIN_TMP_PATH, os.path.basename(url))
-    download_cmd = "wget --no-check-certificate -O \"{}\" \"{}\"".format(tmp_archive_path, url)
+    tmp_archive_path = os.path.join(PLUGIN_TMP_PATH, os.path.basename(url)) #
+    download_cmd = "wget --no-check-certificate -O \"{}\" \"{}\"".format(tmp_archive_path, url) #
 
     # Logika dla Picon (zip) - bez zmian
     if archive_type == "zip":
@@ -76,20 +76,21 @@ def install_archive(session, title, url, callback_on_finish=None):
             picon_path=picon_path,
             nested_path=nested_picon_path
         )
-    # PRZYWRÓCONA Logika dla list kanałów (tar.gz) - prosty tar + strip-components=1
-    else:
-        full_command = (
-            "{download_cmd} && "
-            # Używamy --strip-components=1
-            "tar -xzf \"{archive_path}\" -C /etc/enigma2/ --strip-components=1 && "
-            "rm -f \"{archive_path}\" && "
-            "echo '>>> Lista kanałów została pomyślnie zainstalowana.' && sleep 3"
-        ).format(
-            download_cmd=download_cmd,
-            archive_path=tmp_archive_path
-        )
+    # PRZYWRÓCONA Logika dla list kanałów (tar.gz) - UŻYWA install_archive_script.sh
+    else: # Obejmuje tar.gz i ipk (chociaż ipk nie używamy)
+        # Upewnij się, że skrypt install_archive_script.sh istnieje i jest wykonywalny
+        install_script_path = os.path.join(PLUGIN_PATH, "install_archive_script.sh") #
+        if not os.path.exists(install_script_path): #
+             show_message_compat(session, "BŁĄD: Brak pliku install_archive_script.sh!", message_type=MessageBox.TYPE_ERROR) #
+             if callback_on_finish: callback_on_finish()
+             return
+        # Nadanie uprawnień do skryptu
+        chmod_cmd = "chmod +x \"{}\"".format(install_script_path)
+        # Wywołanie skryptu bash
+        full_command = "{} && {} && bash {} \"{}\" \"{}\"".format(download_cmd, chmod_cmd, install_script_path, tmp_archive_path, archive_type)
 
-    console_screen_open(session, title, [full_command], callback=callback_on_finish, close_on_finish=True)
+    # Wywołanie konsoli (bez zmian)
+    console_screen_open(session, title, [full_command], callback=callback_on_finish, close_on_finish=True) #
 
 
 def _get_s4aupdater_lists_dynamic_sync():
@@ -101,10 +102,8 @@ def _get_s4aupdater_lists_dynamic_sync():
         cmd = "wget --no-check-certificate -q -T 20 -O {} {}".format(tmp_list_file, s4aupdater_list_txt_url)
         process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         process.communicate()
-        if not (process.returncode == 0 and os.path.exists(tmp_list_file) and os.path.getsize(tmp_list_file) > 0):
-             return []
-    except Exception:
-        return []
+        if not (process.returncode == 0 and os.path.exists(tmp_list_file) and os.path.getsize(tmp_list_file) > 0): return []
+    except Exception: return []
     try:
         urls_dict, versions_dict = {}, {}
         with open(tmp_list_file, 'r', encoding='utf-8', errors='ignore') as f:
@@ -155,15 +154,13 @@ def _get_lists_from_repo_sync():
 def reload_settings_python(session, *args):
     """ Przeładowuje listy kanałów w Enigma2 używając eDVBDB """
     try:
-        db = eDVBDB.getInstance()
-        db.reloadServicelist()
-        db.reloadBouquets()
-        # Wywołanie show_message_compat z sesją
-        show_message_compat(session, "Listy kanałów przeładowane.", message_type=MessageBox.TYPE_INFO, timeout=3)
+        db = eDVBDB.getInstance() #
+        db.reloadServicelist() #
+        db.reloadBouquets() #
+        show_message_compat(session, "Listy kanałów przeładowane.", message_type=MessageBox.TYPE_INFO, timeout=3) #
     except Exception as e:
-        print("[MyUpdater Mod] Błąd podczas przeładowywania list:", e)
-        # Wywołanie show_message_compat z sesją
-        show_message_compat(session, "Wystąpił błąd podczas przeładowywania list.", message_type=MessageBox.TYPE_ERROR)
+        print("[MyUpdater Mod] Błąd podczas przeładowywania list:", e) #
+        show_message_compat(session, "Wystąpił błąd podczas przeładowywania list.", message_type=MessageBox.TYPE_ERROR) #
 
 # === KONIEC FUNKCJI POMOCNICZYCH ===
 
