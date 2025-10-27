@@ -1,12 +1,13 @@
 #!/bin/sh
 # Instalator/aktualizator MyUpdater Mod V4
+# Poprawiony URL install_archive_script.sh
 
 # --- Konfiguracja ---
 PLUGIN_DIR="/usr/lib/enigma2/python/Plugins/Extensions/MyUpdater"
 GITHUB_RAW_URL="https://raw.githubusercontent.com/OliOli2013/MyUpdater-Plugin/main/usr/lib/enigma2/python/Plugins/Extensions/MyUpdater"
-REQUIRED_PKGS="wget curl tar unzip bash" # Dodano bash
+REQUIRED_PKGS="wget curl tar unzip bash"
 
-# Pliki do pobrania (w tym skrypt pomocniczy)
+# Pliki do pobrania
 FILES_TO_DOWNLOAD="
 plugin.py
 logo.png
@@ -40,9 +41,7 @@ done
 if [ -n "$MISSING_PKGS" ]; then
     echo ""
     echo ">>> Próba instalacji brakujących pakietów:$MISSING_PKGS"
-    echo "> Aktualizacja listy pakietów (opkg update)..."
     opkg update
-    echo "> Instalowanie pakietów..."
     opkg install $MISSING_PKGS
     RECHECK_MISSING=""
     for PKG in $MISSING_PKGS; do
@@ -52,9 +51,8 @@ if [ -n "$MISSING_PKGS" ]; then
     done
     if [ -n "$RECHECK_MISSING" ]; then
         echo ""
-        echo "!!! BŁĄD: Nie udało się zainstalować następujących pakietów:$RECHECK_MISSING"
-        echo "!!! Instalacja przerwana. Spróbuj zainstalować je ręcznie."
-        echo "------------------------------------------"
+        echo "!!! BŁĄD: Nie udało się zainstalować:$RECHECK_MISSING"
+        echo "!!! Instalacja przerwana."
         exit 1
     else
         echo "> Wymagane pakiety zostały zainstalowane."
@@ -62,14 +60,13 @@ if [ -n "$MISSING_PKGS" ]; then
 else
     echo "> Wszystkie wymagane pakiety są już zainstalowane."
 fi
-# --- Koniec sprawdzania zależności ---
 
-# --- Pobieranie i instalacja plików wtyczki ---
+# --- Tworzenie katalogu ---
 echo ""
-echo ">>> Tworzenie katalogu wtyczki (jeśli nie istnieje):"
-echo "  $PLUGIN_DIR"
+echo ">>> Tworzenie katalogu wtyczki:"
 mkdir -p "$PLUGIN_DIR"
 
+# --- Pobieranie plików ---
 echo ""
 echo ">>> Pobieranie plików wtyczki..."
 SUCCESS=true
@@ -77,37 +74,28 @@ for FILE in $FILES_TO_DOWNLOAD; do
     echo "  > Pobieranie $FILE..."
     wget -q "$GITHUB_RAW_URL/$FILE" -O "$PLUGIN_DIR/$FILE"
     if [ $? -ne 0 ]; then
-        echo "  !!! BŁĄD podczas pobierania $FILE"
+        echo "  !!! BŁĄD: nie udało się pobrać $FILE"
         SUCCESS=false
     fi
 done
 
 if [ "$SUCCESS" = false ]; then
-    echo ""
-    echo "!!! Wystąpiły błędy podczas pobierania plików. Instalacja niekompletna."
-    echo "------------------------------------------"
+    echo "!!! Błędy pobierania – instalacja niekompletna."
     exit 1
 fi
-# --- Koniec pobierania ---
 
-# --- Nadawanie uprawnień ---
+# --- Uprawnienia ---
 echo ""
-echo ">>> Ustawianie uprawnień dla plików wtyczki..."
-chmod 644 "$PLUGIN_DIR"/*.png "$PLUGIN_DIR"/*.py # Uprawnienia dla .png i .py
-chmod +x "$PLUGIN_DIR/install_archive_script.sh" # Nadanie uprawnień wykonywania dla skryptu
-# --- Koniec nadawania uprawnień ---
+echo ">>> Nadawanie uprawnień..."
+chmod 644 "$PLUGIN_DIR"/*.py "$PLUGIN_DIR"/*.png
+chmod +x "$PLUGIN_DIR/install_archive_script.sh"
 
-# --- Czyszczenie starych plików .pyo ---
-echo ""
-echo ">>> Usuwanie starych skompilowanych plików Pythona (.pyo)..."
+# --- Czyszczenie ---
 rm -f "$PLUGIN_DIR"/*.pyo
-# --- Koniec czyszczenia ---
 
 echo ""
 echo "------------------------------------------"
-echo ">>> Instalacja/Aktualizacja MyUpdater Mod zakończona pomyślnie."
-echo ">>> Zalecany restart GUI Enigma2!"
+echo ">>> Instalacja zakończona sukcesem!"
+echo ">>> Zalecany restart GUI Enigma2."
 echo "------------------------------------------"
-echo ""
-
 exit 0
