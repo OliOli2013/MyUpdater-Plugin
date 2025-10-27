@@ -1,61 +1,44 @@
-#!/bin/bash
-# install_archive_script.sh (MyUpdater Mod V4 - Poprawiona wersja)
-# Rozpakowuje listy kanałów (.tar.gz) do /etc/enigma2
+#!/bin/sh
+# Skrypt do instalacji list kanałów (zip lub tar.gz)
+# Argument 1: Ścieżka do archiwum
+# Argument 2: Typ (zip lub tar.gz)
 
 ARCHIVE_PATH="$1"
 ARCHIVE_TYPE="$2"
-TARGET_DIR="/etc/enigma2" # Katalog docelowy dla list kanałów
-# Plik logu (opcjonalny, do debugowania)
-LOG_FILE="/tmp/MyUpdater_install_archive.log"
+TARGET_DIR="/etc/enigma2/"
+TMP_DIR="/tmp/MyUpdater_chlist" # Dedykowany katalog tymczasowy
 
-# Przekieruj standardowe wyjście i błędy do pliku logu, zachowując je na konsoli
-exec > >(tee -a "$LOG_FILE") 2>&1
+echo ">>> [Skrypt] Rozpoczynam instalację: $ARCHIVE_PATH"
 
-echo "------------------------------------------"
-echo ">>> $(date) - Rozpoczynam rozpakowywanie: $ARCHIVE_PATH"
-echo ">>> Typ archiwum: $ARCHIVE_TYPE"
-echo ">>> Katalog docelowy: $TARGET_DIR"
+rm -rf "$TMP_DIR"
+mkdir -p "$TMP_DIR"
 
-# Sprawdzenie czy plik archiwum istnieje
-if [ ! -f "$ARCHIVE_PATH" ]; then
-    echo "!!! BŁĄD: Plik archiwum nie istnieje: $ARCHIVE_PATH"
-    echo "------------------------------------------"
+# Rozpakuj
+if [ "$ARCHIVE_TYPE" = "zip" ]; then
+    unzip -o -q "$ARCHIVE_PATH" -d "$TMP_DIR"
+elif [ "$ARCHIVE_TYPE" = "tar.gz" ]; then
+    tar -xzf "$ARCHIVE_PATH" -C "$TMP_DIR"
+else
+    echo ">>> [Skrypt] BŁĄD: Nieznany typ archiwum: $ARCHIVE_TYPE"
     exit 1
 fi
 
-# Logika tylko dla tar.gz (listy kanałów)
-if [ "$ARCHIVE_TYPE" = "tar.gz" ]; then
-    echo ">>> Rozpakowywanie tar.gz do $TARGET_DIR przy użyciu --strip-components=1 ..."
-    # Używamy opcji -xzvf dla bardziej szczegółowego logowania
-    # --strip-components=1 usuwa pierwszy poziom katalogu z archiwum
-    # --overwrite zapewnia nadpisanie istniejących plików
-    tar -xzvf "$ARCHIVE_PATH" -C "$TARGET_DIR" --strip-components=1 --overwrite
-    EXIT_CODE=$? # Zapisz kod wyjścia polecenia tar
+# Znajdź pliki
+FILES=$(find "$TMP_DIR" -type f \( -name "lamedb" -o -name "*.tv" -o -name "*.radio" \))
 
-    if [ $EXIT_CODE -ne 0 ]; then
-        echo "!!! BŁĄD podczas rozpakowywania tar.gz (kod: $EXIT_CODE)"
-        # Usuń archiwum nawet przy błędzie, aby nie zajmowało miejsca
-        rm -f "$ARCHIVE_PATH"
-        echo "------------------------------------------"
-        exit 1 # Zakończ z błędem
-    else
-        echo ">>> Archiwum tar.gz rozpakowane pomyślnie."
-    fi
-
-# Obsługa innych typów (choć nie powinny tu trafić wg plugin.py)
+if [ -n "$FILES" ]; then
+    echo ">>> [Skrypt] Znaleziono pliki list. Przenoszę do $TARGET_DIR..."
+    # Używamy xargs, jest bardziej niezawodne
+    find "$TMP_DIR" -type f \( -name "lamedb" -o -name "*.tv" -o -name "*.radio" \) | xargs -r -I % mv -f % "$TARGET_DIR"
+    
+    echo ">>> [Skrypt] Pliki przeniesione."
+    rm -rf "$TMP_DIR"
+    rm -f "$ARCHIVE_PATH" # Usuń archiwum .zip/.tar.gz z /tmp/MyUpdater/
+    echo ">>> [Skrypt] Lista zainstalowana i posprzątano."
+    exit 0
 else
-    echo "!!! OSTRZEŻENIE: Ten skrypt jest przeznaczony tylko dla tar.gz. Otrzymano: $ARCHIVE_TYPE"
-    # Nie robimy nic, plugin.py powinien obsłużyć inne typy (np. zip dla picon)
-    # Usuńmy jednak plik tymczasowy, skoro go nie użyliśmy
-     rm -f "$ARCHIVE_PATH"
-     echo "------------------------------------------"
-    exit 1 # Zakończ z błędem, bo typ jest nieprawidłowy dla tego skryptu
+    echo ">>> [Skrypt] BŁĄD: Nie znaleziono plików list (lamedb, *.tv) w archiwum!"
+    rm -rf "$TMP_DIR"
+    rm -f "$ARCHIVE_PATH" # Posprzątaj mimo błędu
+    exit 1
 fi
-
-# Usuń plik archiwum po pomyślnym rozpakowaniu
-echo ">>> Usuwanie pliku archiwum: $ARCHIVE_PATH"
-rm -f "$ARCHIVE_PATH"
-
-echo ">>> Rozpakowywanie zakończone pomyślnie."
-echo "------------------------------------------"
-exit 0 # Zakończ sukcesem
