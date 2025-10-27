@@ -32,7 +32,8 @@ def msg(session, txt, typ=MessageBox.TYPE_INFO, timeout=6):
     reactor.callLater(0.2, lambda: session.open(MessageBox, txt, typ, timeout=timeout))
 
 def console(session, title, cmdlist, onClose, autoClose=True):
-    log("Console: {} | {}".format(title, " ; "..join(cmdlist)))
+    # --- POPRAWKA LITERÓWKI TUTAJ ---
+    log("Console: {} | {}".format(title, " ; ".join(cmdlist)))
     try:
         c = session.open(Console, title=title, cmdlist=cmdlist, closeOnSuccess=autoClose)
         c.onClose.append(onClose)
