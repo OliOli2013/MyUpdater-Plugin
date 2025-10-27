@@ -3,10 +3,10 @@
 # MyUpdater (Mod 2025) V4
 # Bazuje na oryginalnej wtyczce MyUpdater (Sancho, gut)
 # Przebudowane z użyciem kodu PanelAIO (Paweł Pawełek)
+# Wymaga install_archive_script.sh
 #
 from __future__ import print_function
 from __future__ import absolute_import
-
 from enigma import eDVBDB
 from Screens.Screen import Screen
 from Screens.Console import Console
@@ -17,17 +17,19 @@ from Components.ActionMap import ActionMap
 from Components.MenuList import MenuList
 from Components.Label import Label
 from Plugins.Plugin import PluginDescriptor
+from Tools.Directories import fileExists
 
 import os
 import subprocess
 import json
+import datetime
 from twisted.internet import reactor
 from threading import Thread
 
 # === SEKCJA GLOBALNYCH ZMIENNYCH ===
 PLUGIN_PATH = os.path.dirname(os.path.realpath(__file__))
 PLUGIN_TMP_PATH = "/tmp/MyUpdater/"
-VER = "V4"  # Aktualna wersja zainstalowana
+VER = "V4" # Aktualna wersja zainstalowana
 
 # === FUNKCJE POMOCNICZE ===
 
@@ -36,11 +38,7 @@ def show_message_compat(session, message, message_type=MessageBox.TYPE_INFO, tim
 
 def console_screen_open(session, title, cmds_with_args, callback=None, close_on_finish=False):
     cmds_list = cmds_with_args if isinstance(cmds_with_args, list) else [cmds_with_args]
-    def _open():
-        c = session.open(Console, title=title, cmdlist=cmds_list, closeOnSuccess=close_on_finish)
-        if callback:
-            c.onClose.append(callback)
-    reactor.callLater(0.1, _open)
+    reactor.callLater(0.1, lambda: session.open(Console, title=title, cmdlist=cmds_list, closeOnSuccess=close_on_finish).onClose.append(callback) if callback else session.open(Console, title=title, cmdlist=cmds_list, closeOnSuccess=close_on_finish))
 
 def prepare_tmp_dir():
     if not os.path.exists(PLUGIN_TMP_PATH):
@@ -49,27 +47,21 @@ def prepare_tmp_dir():
         except OSError as e:
             print("[MyUpdater Mod] Error creating tmp dir:", e)
 
+# Wersja install_archive używająca install_archive_script.sh
 def install_archive(session, title, url, callback_on_finish=None):
-    """
-    Poprawka: rozróżniaj PICONY po tytule, a nie po rozszerzeniu.
-    - jeśli 'picon' w tytule -> instalacja do /usr/share/enigma2/picon (zip)
-    - wszystko inne (zip/tar.gz/tgz/ipk) -> przez install_archive_script.sh (listy kanałów itd.)
-    """
-    supported = (".zip", ".tar.gz", ".tgz", ".ipk")
-    if not url.endswith(supported):
+    # Sprawdzenie formatu
+    if not url.endswith((".zip", ".tar.gz", ".tgz")):
         show_message_compat(session, "Nieobsługiwany format archiwum!", message_type=MessageBox.TYPE_ERROR)
-        if callback_on_finish:
-            callback_on_finish()
+        if callback_on_finish: callback_on_finish()
         return
-
-    is_picons = "picon" in (title or "").lower()
-
+    # Rozpoznanie typu archiwum
+    archive_type = "zip" if url.endswith(".zip") else "tar.gz"
     prepare_tmp_dir()
     tmp_archive_path = os.path.join(PLUGIN_TMP_PATH, os.path.basename(url))
-    download_cmd = 'wget --no-check-certificate -O "{}" "{}"'.format(tmp_archive_path, url)
+    download_cmd = "wget --no-check-certificate -O \"{}\" \"{}\"".format(tmp_archive_path, url)
 
-    if is_picons:
-        # Instalacja piconów (tylko, gdy tytuł zawiera "picon")
+    # Logika dla Picon (zip) - obsługiwana bezpośrednio
+    if archive_type == "zip":
         picon_path = "/usr/share/enigma2/picon"
         nested_picon_path = os.path.join(picon_path, "picon")
         full_command = (
@@ -85,31 +77,22 @@ def install_archive(session, title, url, callback_on_finish=None):
             picon_path=picon_path,
             nested_path=nested_picon_path
         )
+    # Logika dla list kanałów (tar.gz) - UŻYWA install_archive_script.sh
     else:
-        # Listy kanałów i inne archiwa – zawsze przez skrypt bash
+        # Upewnij się, że skrypt install_archive_script.sh istnieje i jest wykonywalny
         install_script_path = os.path.join(PLUGIN_PATH, "install_archive_script.sh")
-        if not os.path.exists(install_script_path):
-            show_message_compat(session, "BŁĄD: Brak pliku install_archive_script.sh!", message_type=MessageBox.TYPE_ERROR)
-            if callback_on_finish:
-                callback_on_finish()
-            return
-        chmod_cmd = 'chmod +x "{}"'.format(install_script_path)
-        archive_type = (
-            "tar.gz" if url.endswith((".tar.gz", ".tgz"))
-            else "ipk" if url.endswith(".ipk")
-            else "zip"
-        )
-        full_command = '{} && {} && bash "{}" "{}" "{}"'.format(
-            download_cmd, chmod_cmd, install_script_path, tmp_archive_path, archive_type
-        )
+        if not fileExists(install_script_path): # Używamy fileExists dla pewności
+             show_message_compat(session, "BŁĄD: Brak pliku install_archive_script.sh!\nZaktualizuj wtyczkę.", message_type=MessageBox.TYPE_ERROR, timeout=-1)
+             if callback_on_finish: callback_on_finish()
+             return
+        # Nadanie uprawnień do skryptu (choć installer.sh powinien to zrobić)
+        chmod_cmd = "chmod +x \"{}\"".format(install_script_path)
+        # Wywołanie skryptu bash z argumentami: ścieżka archiwum i typ
+        full_command = "{} && {} && bash {} \"{}\" \"{}\"".format(download_cmd, chmod_cmd, install_script_path, tmp_archive_path, archive_type)
 
-    console_screen_open(
-        session,
-        title,
-        [full_command],
-        callback=callback_on_finish,
-        close_on_finish=True
-    )
+    # Wywołanie konsoli
+    console_screen_open(session, title, [full_command], callback=callback_on_finish, close_on_finish=True)
+
 
 def _get_s4aupdater_lists_dynamic_sync():
     s4aupdater_list_txt_url = 'http://s4aupdater.one.pl/s4aupdater_list.txt'
@@ -120,21 +103,15 @@ def _get_s4aupdater_lists_dynamic_sync():
         cmd = "wget --no-check-certificate -q -T 20 -O {} {}".format(tmp_list_file, s4aupdater_list_txt_url)
         process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         process.communicate()
-        if not (process.returncode == 0 and os.path.exists(tmp_list_file) and os.path.getsize(tmp_list_file) > 0):
-            return []
-    except Exception:
-        return []
+        if not (process.returncode == 0 and fileExists(tmp_list_file) and os.path.getsize(tmp_list_file) > 0): return []
+    except Exception: return []
     try:
         urls_dict, versions_dict = {}, {}
         with open(tmp_list_file, 'r', encoding='utf-8', errors='ignore') as f:
             for line in f:
                 clean_line = line.strip()
-                if "_url:" in clean_line:
-                    parts = clean_line.split(':', 1)
-                    urls_dict[parts[0].strip()] = parts[1].strip()
-                elif "_version:" in clean_line:
-                    parts = clean_line.split(':', 1)
-                    versions_dict[parts[0].strip()] = parts[1].strip()
+                if "_url:" in clean_line: parts = clean_line.split(':', 1); urls_dict[parts[0].strip()] = parts[1].strip()
+                elif "_version:" in clean_line: parts = clean_line.split(':', 1); versions_dict[parts[0].strip()] = parts[1].strip()
         for var_name, url_value in urls_dict.items():
             display_name_base = var_name.replace('_url', '').replace('_', ' ').title()
             version_key = var_name.replace('_url', '_version')
@@ -154,28 +131,27 @@ def _get_lists_from_repo_sync():
     try:
         cmd = "wget --no-check-certificate -q -T 20 -O {} {}".format(tmp_json_path, manifest_url)
         process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        process.communicate()
-        if process.returncode != 0:
-            return []
-        if not (os.path.exists(tmp_json_path) and os.path.getsize(tmp_json_path) > 0):
-            return []
+        _, stderr = process.communicate()
+        ret_code = process.returncode
+        if ret_code != 0: return []
+        if not (fileExists(tmp_json_path) and os.path.getsize(tmp_json_path) > 0): return []
     except Exception as e:
         print("[MyUpdater Mod] Błąd pobierania manifest.json (wyjątek):", e)
         return []
     lists_menu = []
     try:
-        with open(tmp_json_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
+        with open(tmp_json_path, 'r', encoding='utf-8') as f: data = json.load(f)
         for item in data:
             menu_title = "{} - {} ({})".format(item.get('name', 'Brak nazwy'), item.get('author', ''), item.get('version', ''))
             action = "archive:{}".format(item.get('url', ''))
-            if item.get('url'):
-                lists_menu.append((menu_title, action))
+            if item.get('url'): lists_menu.append((menu_title, action))
     except Exception as e:
         print("[MyUpdater Mod] Błąd przetwarzania pliku manifest.json:", e)
         return []
+    if not lists_menu: return []
     return lists_menu
 
+# Funkcja przeładowania z PanelAIO
 def reload_settings_python(session, *args):
     """ Przeładowuje listy kanałów w Enigma2 używając eDVBDB """
     try:
@@ -188,6 +164,7 @@ def reload_settings_python(session, *args):
         show_message_compat(session, "Wystąpił błąd podczas przeładowywania list.", message_type=MessageBox.TYPE_ERROR)
 
 # === KONIEC FUNKCJI POMOCNICZYCH ===
+
 
 # Główna klasa wtyczki (Menu)
 class Fantastic(Screen):
@@ -203,37 +180,22 @@ class Fantastic(Screen):
         self.session = session
         Screen.__init__(self, session)
         self.setTitle("MyUpdater")
-        mainmenu = [
-            ("1. Listy kanałów", "menu_lists"),
-            ("2. Instaluj Softcam", "menu_softcam"),
-            ("3. Pobierz Picony Transparent", "picons_github"),
-            ("4. Aktualizacja Wtyczki", "plugin_update"),
-            ("5. Informacja o Wtyczce", "plugin_info")
-        ]
+        mainmenu = [ ("1. Listy kanałów", "menu_lists"), ("2. Instaluj Softcam", "menu_softcam"), ("3. Pobierz Picony Transparent", "picons_github"), ("4. Aktualizacja Wtyczki", "plugin_update"), ("5. Informacja o Wtyczce", "plugin_info") ]
         self['menu'] = MenuList(mainmenu)
         self['info'] = Label("Wybierz opcję i naciśnij OK")
         self['version'] = Label("Wersja: " + VER)
-        self['actions'] = ActionMap(['WizardActions', 'DirectionActions'], {
-            'ok': self.runMenuOption,
-            'back': self.close
-        }, -1)
+        self['actions'] = ActionMap(['WizardActions', 'DirectionActions'], {'ok': self.runMenuOption, 'back': self.close}, -1)
         prepare_tmp_dir()
 
     def runMenuOption(self):
         selected = self['menu'].l.getCurrentSelection()
-        if selected is None:
-            return
+        if selected is None: return
         callback_key = selected[1]
-        if callback_key == "menu_lists":
-            self.runChannelListMenu()
-        elif callback_key == "menu_softcam":
-            self.runSoftcamMenu()
-        elif callback_key == "picons_github":
-            self.runPiconGitHub()
-        elif callback_key == "plugin_update":
-            self.runPluginUpdate()
-        elif callback_key == "plugin_info":
-            self.runInfo()
+        if callback_key == "menu_lists": self.runChannelListMenu()
+        elif callback_key == "menu_softcam": self.runSoftcamMenu()
+        elif callback_key == "picons_github": self.runPiconGitHub()
+        elif callback_key == "plugin_update": self.runPluginUpdate()
+        elif callback_key == "plugin_info": self.runInfo()
 
     def runChannelListMenu(self):
         self['info'].setText("Pobieranie list (GitHub i S4A)...")
@@ -254,52 +216,33 @@ class Fantastic(Screen):
         self.session.openWithCallback(self.runChannelListSelected, ChoiceBox, title="Wybierz listę kanałów do instalacji", list=lists)
 
     def runChannelListSelected(self, choice):
-        if not choice:
-            return
+        if not choice: return
         try:
             title = choice[0]
             url = choice[1].split(':', 1)[1]
             show_message_compat(self.session, "Rozpoczynanie instalacji listy...", timeout=2)
+            # Używamy callback reload_settings_python
             install_archive(self.session, title, url, callback_on_finish=lambda: reload_settings_python(self.session))
         except Exception as e:
             print("[MyUpdater Mod] Błąd wyboru listy:", e)
             show_message_compat(self.session, "Błąd wyboru listy.", MessageBox.TYPE_ERROR)
 
-    # --- Softcam, Picony, Aktualizacja, Info ---
+    # --- Reszta funkcji bez zmian (Softcam, Picony, Aktualizacja, Info) ---
 
     def runSoftcamMenu(self):
-        options = [
-            ("Oscam (z feedu + fallback Levi45)", "oscam_feed"),
-            ("Oscam (tylko Levi45)", "oscam_levi45"),
-            ("nCam (biko-73)", "ncam_biko")
-        ]
+        options = [ ("Oscam (z feedu + fallback Levi45)", "oscam_feed"), ("Oscam (tylko Levi45)", "oscam_levi45"), ("nCam (biko-73)", "ncam_biko") ]
         self.session.openWithCallback(self.runSoftcamSelected, ChoiceBox, title="Wybierz Softcam do instalacji", list=options)
 
     def runSoftcamSelected(self, choice):
-        if not choice:
-            return
+        if not choice: return
         key, title, cmd = choice[1], choice[0], ""
         if key == "oscam_feed":
-            cmd = (
-                'echo "Instalowanie/Aktualizowanie Softcam Feed..." && '
-                'wget -O - -q http://updates.mynonpublic.com/oea/feed | bash && '
-                'echo "Aktualizuję listę pakietów..." && opkg update && '
-                'echo "Wyszukuję najlepszą wersję Oscam w feedach..." && '
-                'PKG_NAME=$(opkg list | grep "oscam" | grep "ipv4only" | grep -E -m 1 "master|emu|stable" | cut -d " " -f 1) && '
-                'if [ -n "$PKG_NAME" ]; then '
-                '  echo "Znaleziono pakiet: $PKG_NAME. Rozpoczynam instalację..." && opkg install $PKG_NAME; '
-                'else '
-                '  echo "Nie znaleziono odpowiedniego pakietu Oscam w feedach. Próbuję instalacji z alternatywnego źródła (Levi45)..." && '
-                '  wget -q --no-check-certificate https://raw.githubusercontent.com/levi-45/Levi45Emulator/main/installer.sh -O - | /bin/sh; '
-                'fi && echo "Instalacja Oscam zakończona." && sleep 3'
-            )
-        elif key == "oscam_levi45":
-            cmd = 'wget -q --no-check-certificate https://raw.githubusercontent.com/levi-45/Levi45Emulator/main/installer.sh -O - | /bin/sh'
-        elif key == "ncam_biko":
-            cmd = 'wget https://raw.githubusercontent.com/biko-73/Ncam_EMU/main/installer.sh -O - | /bin/sh'
+            cmd = """ echo "Instalowanie/Aktualizowanie Softcam Feed..." && wget -O - -q http://updates.mynonpublic.com/oea/feed | bash && echo "Aktualizuję listę pakietów..." && opkg update && echo "Wyszukuję najlepszą wersję Oscam w feedach..." && PKG_NAME=$(opkg list | grep 'oscam' | grep 'ipv4only' | grep -E -m 1 'master|emu|stable' | cut -d ' ' -f 1) && if [ -n "$PKG_NAME" ]; then echo "Znaleziono pakiet: $PKG_NAME. Rozpoczynam instalację..." && opkg install $PKG_NAME; else echo "Nie znaleziono odpowiedniego pakietu Oscam w feedach. Próbuję instalacji z alternatywnego źródła (Levi45)..." && wget -q "--no-check-certificate" https://raw.githubusercontent.com/levi-45/Levi45Emulator/main/installer.sh -O - | /bin/sh; fi && echo "Instalacja Oscam zakończona." && sleep 3 """
+        elif key == "oscam_levi45": cmd = "wget -q \"--no-check-certificate\" https://raw.githubusercontent.com/levi-45/Levi45Emulator/main/installer.sh -O - | /bin/sh"
+        elif key == "ncam_biko": cmd = "wget https://raw.githubusercontent.com/biko-73/Ncam_EMU/main/installer.sh -O - | /bin/sh"
         if cmd:
-            show_message_compat(self.session, "Rozpoczynanie instalacji {}...".format(title), timeout=2)
-            console_screen_open(self.session, title, [cmd], close_on_finish=True)
+             show_message_compat(self.session, "Rozpoczynanie instalacji {}...".format(title), timeout=2)
+             console_screen_open(self.session, title, [cmd.strip()], close_on_finish=True)
 
     def runPiconGitHub(self):
         title, PICONS_URL = "Pobieranie Picon (Transparent)", "https://github.com/OliOli2013/PanelAIO-Plugin/raw/main/Picony.zip"
@@ -321,16 +264,13 @@ class Fantastic(Screen):
             cmd = "wget --no-check-certificate -q -T 10 -t 2 -O {} {}".format(tmp_version_path, version_url)
             process = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             process.communicate()
-            if process.returncode == 0 and os.path.exists(tmp_version_path) and os.path.getsize(tmp_version_path) > 0:
-                with open(tmp_version_path, 'r') as f:
-                    online_version = f.read().strip()
-            else:
-                error_msg = "Nie udało się pobrać informacji o wersji."
+            if process.returncode == 0 and fileExists(tmp_version_path) and os.path.getsize(tmp_version_path) > 0:
+                with open(tmp_version_path, 'r') as f: online_version = f.read().strip()
+            else: error_msg = "Nie udało się pobrać informacji o wersji."
         except Exception as e:
             print("[MyUpdater Mod] Błąd sprawdzania wersji online:", e)
             error_msg = "Błąd podczas sprawdzania wersji."
-        if os.path.exists(tmp_version_path):
-            os.remove(tmp_version_path)
+        if fileExists(tmp_version_path): os.remove(tmp_version_path)
         reactor.callFromThread(self._on_version_check_complete, online_version, installer_url, error_msg)
 
     def _on_version_check_complete(self, online_version, installer_url, error_msg):
@@ -342,15 +282,11 @@ class Fantastic(Screen):
             print("[MyUpdater Mod] Wersja online: '{}', Wersja lokalna: '{}'".format(online_version, VER))
             if online_version != VER:
                 message = "Dostępna jest nowa wersja: {}\nTwoja wersja: {}\n\nCzy chcesz zaktualizować teraz?".format(online_version, VER)
-                # UWAGA: bez parametru title= (nie wszystkie buildy go wspierają)
-                self.session.openWithCallback(
-                    lambda confirmed: self._doPluginUpdate(installer_url) if confirmed else None,
-                    MessageBox, message, MessageBox.TYPE_YESNO
-                )
+                self.session.openWithCallback( lambda confirmed: self._doPluginUpdate(installer_url) if confirmed else None, MessageBox, message, type=MessageBox.TYPE_YESNO, title="Dostępna aktualizacja" )
             else:
                 show_message_compat(self.session, "Używasz najnowszej wersji wtyczki ({}).".format(VER), MessageBox.TYPE_INFO)
         else:
-            show_message_compat(self.session, "Nie udało się odczytać wersji online.", MessageBox.TYPE_ERROR)
+             show_message_compat(self.session, "Nie udało się odczytać wersji online.", MessageBox.TYPE_ERROR)
 
     def _doPluginUpdate(self, url):
         cmd = "wget -q -O - {} | /bin/sh".format(url)
@@ -358,12 +294,7 @@ class Fantastic(Screen):
         console_screen_open(self.session, title, [cmd], close_on_finish=True)
 
     def runInfo(self):
-        info_text = (
-            "MyUpdater (Mod 2025) {}\n\n"
-            "Przebudowa: Paweł Pawełek\n(msisystem@t.pl)\n\n"
-            "Wtyczka bazuje na kodzie źródłowym PanelAIO.\n\n"
-            "Oryginalni twórcy MyUpdater:\nSancho, gut"
-        ).format(VER)
+        info_text = ( "MyUpdater (Mod 2025) {}\n\nPrzebudowa: Paweł Pawełek\n(msisystem@t.pl)\n\nWtyczka bazuje na kodzie źródłowym PanelAIO.\n\nOryginalni twórcy MyUpdater:\nSancho, gut" ).format(VER)
         self.session.open(MessageBox, info_text, MessageBox.TYPE_INFO)
 
 # === DEFINICJA PLUGINU ===
@@ -372,10 +303,4 @@ def main(session, **kwargs):
     session.open(Fantastic)
 
 def Plugins(**kwargs):
-    return [PluginDescriptor(
-        name="MyUpdater",
-        description="MyUpdater Mod {} (bazuje na PanelAIO)".format(VER),
-        where=PluginDescriptor.WHERE_PLUGINMENU,
-        icon="myupdater.png",
-        fnc=main
-    )]
+    return [PluginDescriptor(name="MyUpdater", description="MyUpdater Mod {} (bazuje na PanelAIO)".format(VER), where = PluginDescriptor.WHERE_PLUGINMENU, icon = "myupdater.png", fnc = main)]
