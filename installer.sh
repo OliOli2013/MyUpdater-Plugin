@@ -1,29 +1,113 @@
 #!/bin/sh
-# MyUpdater-Mod installer V4 – MIRROR URL (always works)
-PLUGIN_DIR="/usr/lib/enigma2/python/Plugins/Extensions/MyUpdater"
-MIRROR="https://raw.githubusercontent.com/msisystem/MyUpdater-FIX/main"
-PKGS="wget curl tar unzip bash"
-FILES="plugin.py logo.png myupdater.png __init__.py install_archive_script.sh"
+# Instalator/aktualizator MyUpdater Mod V4
 
-echo ">>> MyUpdater-Mod installer (mirror)"
+# --- Konfiguracja ---
+PLUGIN_DIR="/usr/lib/enigma2/python/Plugins/Extensions/MyUpdater"
+GITHUB_RAW_URL="https://raw.githubusercontent.com/OliOli2013/MyUpdater-Plugin/main/usr/lib/enigma2/python/Plugins/Extensions/MyUpdater"
+REQUIRED_PKGS="wget curl tar unzip bash" # Dodano bash
+
+# Pliki do pobrania (w tym skrypt pomocniczy)
+FILES_TO_DOWNLOAD="
+plugin.py
+logo.png
+myupdater.png
+__init__.py
+install_archive_script.sh
+"
+# --- Koniec Konfiguracji ---
+
+echo "------------------------------------------"
+echo ">>> Rozpoczynam instalację/aktualizację MyUpdater Mod..."
+echo "------------------------------------------"
+
+# --- Sprawdzanie i instalacja zależności ---
+echo ""
+echo ">>> Sprawdzanie zależności..."
+MISSING_PKGS=""
+for PKG in $REQUIRED_PKGS; do
+    if ! command -v $PKG > /dev/null 2>&1; then
+        if ! opkg list-installed | grep -q "^$PKG "; then
+            echo "  > Brak pakietu: $PKG"
+            MISSING_PKGS="$MISSING_PKGS $PKG"
+        else
+             echo "  > Znaleziono (jako pakiet): $PKG"
+        fi
+    else
+        echo "  > Znaleziono (jako komenda): $PKG"
+    fi
+done
+
+if [ -n "$MISSING_PKGS" ]; then
+    echo ""
+    echo ">>> Próba instalacji brakujących pakietów:$MISSING_PKGS"
+    echo "> Aktualizacja listy pakietów (opkg update)..."
+    opkg update
+    echo "> Instalowanie pakietów..."
+    opkg install $MISSING_PKGS
+    RECHECK_MISSING=""
+    for PKG in $MISSING_PKGS; do
+        if ! command -v $PKG > /dev/null 2>&1 && ! opkg list-installed | grep -q "^$PKG "; then
+            RECHECK_MISSING="$RECHECK_MISSING $PKG"
+        fi
+    done
+    if [ -n "$RECHECK_MISSING" ]; then
+        echo ""
+        echo "!!! BŁĄD: Nie udało się zainstalować następujących pakietów:$RECHECK_MISSING"
+        echo "!!! Instalacja przerwana. Spróbuj zainstalować je ręcznie."
+        echo "------------------------------------------"
+        exit 1
+    else
+        echo "> Wymagane pakiety zostały zainstalowane."
+    fi
+else
+    echo "> Wszystkie wymagane pakiety są już zainstalowane."
+fi
+# --- Koniec sprawdzania zależności ---
+
+# --- Pobieranie i instalacja plików wtyczki ---
+echo ""
+echo ">>> Tworzenie katalogu wtyczki (jeśli nie istnieje):"
+echo "  $PLUGIN_DIR"
 mkdir -p "$PLUGIN_DIR"
 
-# --- zależności ---
-for p in $PKGS; do
-  command -v $p >/dev/null || opkg install $p
+echo ""
+echo ">>> Pobieranie plików wtyczki..."
+SUCCESS=true
+for FILE in $FILES_TO_DOWNLOAD; do
+    echo "  > Pobieranie $FILE..."
+    wget -q "$GITHUB_RAW_URL/$FILE" -O "$PLUGIN_DIR/$FILE"
+    if [ $? -ne 0 ]; then
+        echo "  !!! BŁĄD podczas pobierania $FILE"
+        SUCCESS=false
+    fi
 done
 
-# --- pobieranie ---
-for f in $FILES; do
-  echo "  > $f"
-  wget -q "$MIRROR/$f" -O "$PLUGIN_DIR/$f" || {
-    echo "!!! błąd pobierania $f"; exit 1
-  }
-done
+if [ "$SUCCESS" = false ]; then
+    echo ""
+    echo "!!! Wystąpiły błędy podczas pobierania plików. Instalacja niekompletna."
+    echo "------------------------------------------"
+    exit 1
+fi
+# --- Koniec pobierania ---
 
-# --- uprawnienia ---
-chmod 644 "$PLUGIN_DIR"/*.py "$PLUGIN_DIR"/*.png
-chmod +x "$PLUGIN_DIR/install_archive_script.sh"
+# --- Nadawanie uprawnień ---
+echo ""
+echo ">>> Ustawianie uprawnień dla plików wtyczki..."
+chmod 644 "$PLUGIN_DIR"/*.png "$PLUGIN_DIR"/*.py # Uprawnienia dla .png i .py
+chmod +x "$PLUGIN_DIR/install_archive_script.sh" # Nadanie uprawnień wykonywania dla skryptu
+# --- Koniec nadawania uprawnień ---
 
-echo ">>> zakończono – zalecany restart GUI"
+# --- Czyszczenie starych plików .pyo ---
+echo ""
+echo ">>> Usuwanie starych skompilowanych plików Pythona (.pyo)..."
+rm -f "$PLUGIN_DIR"/*.pyo
+# --- Koniec czyszczenia ---
+
+echo ""
+echo "------------------------------------------"
+echo ">>> Instalacja/Aktualizacja MyUpdater Mod zakończona pomyślnie."
+echo ">>> Zalecany restart GUI Enigma2!"
+echo "------------------------------------------"
+echo ""
+
 exit 0
