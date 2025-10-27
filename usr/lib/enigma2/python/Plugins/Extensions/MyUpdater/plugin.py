@@ -32,13 +32,13 @@ def msg(session, txt, typ=MessageBox.TYPE_INFO, timeout=6):
     reactor.callLater(0.2, lambda: session.open(MessageBox, txt, typ, timeout=timeout))
 
 def console(session, title, cmdlist, onClose, autoClose=True):
-    # --- POPRAWKA LITERÓWKI TUTAJ ---
+    # --- POPRAWKA LITERÓWKI (jedna kropka) ---
     log("Console: {} | {}".format(title, " ; ".join(cmdlist)))
     try:
         c = session.open(Console, title=title, cmdlist=cmdlist, closeOnSuccess=autoClose)
         c.onClose.append(onClose)
     except Exception as e:
-        log("Console exception: " + str(e))
+        log("Console exception: "D + str(e))
         onClose()
 
 def tmpdir():
