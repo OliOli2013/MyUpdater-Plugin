@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-#  MyUpdater  V4  –  always install & return
+#  MyUpdater  V4  –  Logika instalacji z PanelAIO
 from __future__ import print_function, absolute_import
 from enigma import eDVBDB
 from Screens.Screen import Screen
@@ -17,7 +17,7 @@ from threading import Thread
 
 PLUGIN_PATH   = os.path.dirname(os.path.realpath(__file__))
 PLUGIN_TMP_PATH = "/tmp/MyUpdater/"
-VER           = "V4" # <-- ZMIANA WERSJI
+VER           = "V4"
 LOG_FILE      = "/tmp/MyUpdater_install.log"
 
 def log(msg):
@@ -32,10 +32,9 @@ def msg(session, txt, typ=MessageBox.TYPE_INFO, timeout=6):
     reactor.callLater(0.2, lambda: session.open(MessageBox, txt, typ, timeout=timeout))
 
 def console(session, title, cmdlist, onClose, autoClose=True):
-    log("Console: {} | {}".format(title, " ; ".join(cmdlist)))
+    log("Console: {} | {}".format(title, " ; "..join(cmdlist)))
     try:
         c = session.open(Console, title=title, cmdlist=cmdlist, closeOnSuccess=autoClose)
-        # ‑‑->  ALWAYS run next step  <‑‑-
         c.onClose.append(onClose)
     except Exception as e:
         log("Console exception: " + str(e))
@@ -45,102 +44,84 @@ def tmpdir():
     if not os.path.exists(PLUGIN_TMP_PATH):
         os.makedirs(PLUGIN_TMP_PATH)
 
-# ----------- detect archive type --------------------
-def detect_type(path):
-    import zipfile, tarfile
+# === FUNKCJA PRZEŁADOWANIA SKOPIOWANA Z PanelAIO ===
+def reload_settings_python(session, *args):
     try:
-        with zipfile.ZipFile(path) as z:
-            names = z.namelist()
-            return 'channels' if any('.tv' in n or '.radio' in n or 'lamedb' in n for n in names) else 'picon'
-    except:
-        pass
-    try:
-        with tarfile.open(path) as t:
-            names = t.getnames()
-            return 'channels' if any('.tv' in n or '.radio' in n or 'lamedb' in n for n in names) else 'picon'
-    except:
-        pass
-    return None
+        db = eDVBDB.getInstance()
+        db.reloadServicelist()
+        db.reloadBouquets()
+        msg(session, "Listy kanałów przeładowane.", timeout=3)
+    except Exception as e:
+        log("[MyUpdater] Błąd podczas przeładowywania list: " + str(e))
+        msg(session, "Wystąpił błąd podczas przeładowywania list.", MessageBox.TYPE_ERROR)
 
-# ----------- install channels  (zip OR tar.gz) ------
-def install_channels(session, archive, finish):
-    target = "/etc/enigma2/"
-    # --- POPRAWKA: Użycie 'xargs' zamiast 'find -exec' ---
-    cmd = (
-        'echo ">>> Rozpakowuję listę kanałów..." && '
-        'TDIR="/tmp/MyUpdater_chlist" && rm -rf "$TDIR" && mkdir -p "$TDIR" && '
-        
-        # Rozpakuj ZIP lub TAR do TDIR
-        'if [[ "{a}" == *.zip ]]; then '
-        '    unzip -o -q "{a}" -d "$TDIR"; '
-        'else '
-        '    tar -xzf "{a}" -C "$TDIR"; '
-        'fi && '
-        
-        # Sprawdź, czy w ogóle znaleziono jakiekolwiek pliki listy
-        'FILES=$(find "$TDIR" -type f \( -name "lamedb" -o -name "*.tv" -o -name "*.radio" \)) && '
-        
-        'if [ -n "$FILES" ]; then '
-        '    echo ">>> Znaleziono pliki list. Przenoszę..." && '
-        # Używamy xargs, jest bardziej niezawodne w busybox
-        '    find "$TDIR" -type f \( -name "lamedb" -o -name "*.tv" -o -name "*.radio" \) | xargs -r -I % mv -f % "{t}" && '
-        '    echo ">>> Pliki przeniesione." && '
-        '    rm -rf "$TDIR" && rm -f "{a}" && '
-        '    echo ">>> Lista zainstalowana."; '
-        'else '
-        '    echo ">>> BŁĄD: Nie znaleziono plików list (lamedb, *.tv) w archiwum!" && '
-        '    rm -rf "$TDIR" && rm -f "{a}" && '
-        '    exit 1; '
-        'fi'
-    ).format(a=archive, t=target)
-
-    def _reload():
-        try:
-            db = eDVBDB.getInstance()
-            db.reloadServicelist()
-            db.reloadBouquets()
-            msg(session, "Listy kanałów przeładowane.")
-        except Exception as e:
-            msg(session, "Błąd przeładowania: " + str(e), MessageBox.TYPE_ERROR)
-        if finish:
-            finish()
-
-    console(session, "Instalacja Listy Kanałów", [cmd], onClose=_reload, autoClose=True)
-
-# ----------- install picons -------------------------
-def install_picons(session, archive, finish):
-    p = "/usr/share/enigma2/picon"
-    n = os.path.join(p, "picon")
-    cmd = (
-        'mkdir -p "{p}" && '
-        'unzip -o -q "{a}" -d "{p}" && '
-        'if [ -d "{n}" ]; then mv -f "{n}"/* "{p}"/; rmdir "{n}"; fi && '
-        'rm -f "{a}" && '
-        'echo ">>> Picony gotowe."'
-    ).format(p=p, a=archive, n=n)
-    console(session, "Instalacja Picon", [cmd], onClose=finish, autoClose=True)
-
-# ----------- after download -------------------------
-def after_download(session, title, path, finish):
-    typ = detect_type(path)
-    if not typ:
-        msg(session, "Nie udało się rozpoznać typu archiwum.", MessageBox.TYPE_ERROR)
-        if finish:
-            finish()
-        return
-    log("Detected: " + typ)
-    if typ == 'channels':
-        install_channels(session, path, finish)
-    else:
-        install_picons(session, path, finish)
-
-# ----------- download + start chain ---------------
+# === NOWA FUNKCJA 'install_archive' BAZUJĄCA NA PanelAIO ===
 def install_archive(session, title, url, finish=None):
-    log("install_archive: " + url)
-    tmpdir()
-    path = os.path.join(PLUGIN_TMP_PATH, os.path.basename(url))
-    cmd  = 'wget --no-check-certificate -O "{}" "{}"'.format(path, url)
-    console(session, title, [cmd], onClose=lambda: after_download(session, title, path, finish), autoClose=True)
+    log("install_archive (logika PanelAIO): " + url)
+    
+    # Określ typ na podstawie URL
+    if url.endswith(".zip"):
+        archive_type = "zip"
+    elif url.endswith((".tar.gz", ".tgz")):
+        archive_type = "tar.gz"
+    else:
+        msg(session, "Nieobsługiwany format archiwum!", MessageBox.TYPE_ERROR)
+        if finish: finish()
+        return
+
+    tmpdir() # Upewnij się, że /tmp/MyUpdater/ istnieje
+    tmp_archive_path = os.path.join(PLUGIN_TMP_PATH, os.path.basename(url))
+    download_cmd = 'wget --no-check-certificate -O "{}" "{}"'.format(tmp_archive_path, url)
+    
+    # Logika dla Picon (skopiowana z PanelAIO)
+    # Rozpoznajemy picony po tytule, tak jak w PanelAIO
+    if "picon" in title.lower() and archive_type == "zip":
+        picon_path = "/usr/share/enigma2/picon"
+        nested_picon_path = os.path.join(picon_path, "picon")
+        full_command = (
+            "{download_cmd} && "
+            "mkdir -p {picon_path} && "
+            "unzip -o -q \"{archive_path}\" -d \"{picon_path}\" && "
+            "if [ -d \"{nested_path}\" ]; then mv -f \"{nested_path}\"/* \"{picon_path}/\"; rmdir \"{nested_path}\"; fi && "
+            "rm -f \"{archive_path}\" && "
+            "echo '>>> Picony zostały pomyślnie zainstalowane.' && sleep 2"
+        ).format(
+            download_cmd=download_cmd,
+            archive_path=tmp_archive_path,
+            picon_path=picon_path,
+            nested_path=nested_picon_path
+        )
+        # Picony nie wymagają przeładowania list, więc callback to 'finish'
+        console(session, title, [full_command], onClose=finish, autoClose=True)
+    
+    # Logika dla List Kanałów (zip lub tar.gz)
+    else:
+        install_script_path = os.path.join(PLUGIN_PATH, "install_archive_script.sh")
+        
+        # Sprawdzenie czy skrypt istnieje (skopiowane z PanelAIO)
+        if not os.path.exists(install_script_path):
+             msg(session, "BŁĄD: Brak pliku install_archive_script.sh!", MessageBox.TYPE_ERROR)
+             if finish: finish()
+             return
+        
+        chmod_cmd = "chmod +x \"{}\"".format(install_script_path)
+        
+        # Używamy 'bash' do uruchomienia skryptu (skopiowane z PanelAIO)
+        full_command = "{download_cmd} && {chmod_cmd} && bash {script} \"{archive_path}\" \"{archive_type}\"".format(
+            download_cmd=download_cmd,
+            chmod_cmd=chmod_cmd,
+            script=install_script_path,
+            archive_path=tmp_archive_path,
+            archive_type=archive_type
+        )
+        
+        # Tworzymy funkcję zwrotną, która najpierw przeładuje listy, a potem wykona 'finish'
+        def combined_callback():
+            reload_settings_python(session) # Najpierw przeładuj
+            if finish:
+                finish() # Potem wykonaj oryginalny 'finish' (np. pokaż komunikat)
+        
+        console(session, title, [full_command], onClose=combined_callback, autoClose=True)
 
 # ----------- sources --------------------------------
 def get_repo_lists():
@@ -202,14 +183,14 @@ class Fantastic(Screen):
                                     ("4. Aktualizacja Wtyczki", "plugin_update"),
                                     ("5. Informacja o Wtyczce", "plugin_info")])
         self["info"]    = Label("Wybierz opcję i naciśnij OK")
-        self["version"] = Label("Wersja: " + VER) # <-- ZMIANA WERSJI
+        self["version"] = Label("Wersja: " + VER)
         self["actions"] = ActionMap(["WizardActions", "DirectionActions"],
                                     {"ok": self.runMenuOption, "back": self.close}, -1)
         tmpdir()
         if fileExists(LOG_FILE):
             try: os.remove(LOG_FILE)
             except: pass
-        log("MyUpdater Mod {} started".format(VER)) # <-- ZMIANA WERSJI
+        log("MyUpdater Mod {} started".format(VER))
 
     def runMenuOption(self):
         sel = self["menu"].getCurrent()
@@ -243,11 +224,16 @@ class Fantastic(Screen):
     def runChannelListSelected(self, choice):
         if not choice: return
         title = choice[0]
-        url   = choice[1].split(":",1)[1]
+        # Bierzemy URL z 'archive:URL'
+        url   = choice[1].split(":",1)[1] 
         log("Selected: {} | {}".format(title, url))
-        msg(self.session, "Rozpoczynam instalację...", timeout=2)
+        
+        # Pokaż natychmiastowy komunikat
+        msg(self.session, "Rozpoczynam instalację:\n'{}'...".format(title), timeout=5)
+        
+        # Użyj nowej funkcji install_archive
         install_archive(self.session, title, url,
-                        finish=lambda: msg(self.session, "Instalacja zakończona.", timeout=3))
+                        finish=lambda: msg(self.session, "Instalacja '{}' zakończona.".format(title), timeout=3))
 
     def runSoftcamMenu(self):
         opts = [("Oscam (feed + Levi45 fallback)", "oscam_feed"),
@@ -272,9 +258,12 @@ class Fantastic(Screen):
 
     def runPiconGitHub(self):
         url   = "https://github.com/OliOli2013/PanelAIO-Plugin/raw/main/Picony.zip"
-        title = "Pobieranie Picon (Transparent)"
+        # Upewnij się, że tytuł zawiera "Picon", aby nowa funkcja install_archive zadziałała poprawnie
+        title = "Pobieranie Picon (Transparent)" 
         log("Picons: " + url)
         msg(self.session, "Rozpoczynam pobieranie picon...", timeout=2)
+        
+        # Użyj nowej funkcji install_archive
         install_archive(self.session, title, url,
                         finish=lambda: msg(self.session, "Picony gotowe.", timeout=3))
 
@@ -302,7 +291,6 @@ class Fantastic(Screen):
             msg(self.session, "Nie udało się sprawdzić wersji.", MessageBox.TYPE_ERROR)
             return
         
-        # Sprawdzamy tylko główną wersję (V4), ignorując .4
         if online and not online.startswith(VER):
             txt = "Dostępna nowa wersja: {}\nTwoja: {}\nZaktualizować?".format(online, VER)
             self.session.openWithCallback(lambda ans: self._doUpdate(inst_url) if ans else None,
@@ -318,7 +306,7 @@ class Fantastic(Screen):
         txt = ("MyUpdater (Mod 2025) {}\n\n"
                "Przebudowa: Paweł Pawełek\n"
                "Wtyczka bazuje na PanelAIO.\n\n"
-               "Oryginał: Sancho, gut").format(VER) # <-- ZMIANA WERSJI
+               "Oryginał: Sancho, gut").format(VER)
         self.session.open(MessageBox, txt, MessageBox.TYPE_INFO)
 
 # ----------- plugin entry -----------------------------
@@ -327,6 +315,6 @@ def main(session, **kwargs):
 
 def Plugins(**kwargs):
     return [PluginDescriptor(name="MyUpdater",
-                            description="MyUpdater Mod {} (PanelAIO)".format(VER), # <-- ZMIANA WERSJI
+                            description="MyUpdater Mod {} (PanelAIO)".format(VER),
                             where=PluginDescriptor.WHERE_PLUGINMENU,
                             icon="myupdater.png", fnc=main)]
