@@ -1,5 +1,5 @@
 #!/bin/sh
-# MyUpdater-Mod installer V4 – naprawiony URL
+# MyUpdater-Mod installer V4 – POPRAWIONY URL
 PLUGIN_DIR="/usr/lib/enigma2/python/Plugins/Extensions/MyUpdater"
 GITHUB="https://raw.githubusercontent.com/OliOli2013/MyUpdater-Plugin/main/usr/lib/enigma2/python/Plugins/Extensions/MyUpdater"
 PKGS="wget curl tar unzip bash"
