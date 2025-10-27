@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# MyUpdater V4.3 – instant install & return
+#  MyUpdater  V4.4  –  always install & return
 from __future__ import print_function, absolute_import
 from enigma import eDVBDB
 from Screens.Screen import Screen
@@ -17,7 +17,7 @@ from threading import Thread
 
 PLUGIN_PATH   = os.path.dirname(os.path.realpath(__file__))
 PLUGIN_TMP_PATH = "/tmp/MyUpdater/"
-VER           = "V4.3"
+VER           = "V4.4"
 LOG_FILE      = "/tmp/MyUpdater_install.log"
 
 def log(msg):
@@ -27,26 +27,25 @@ def log(msg):
     except:
         pass
 
-def msg(session, txt, typ=MessageBox.TYPE_INFO, timeout=8, cb=None):
+def msg(session, txt, typ=MessageBox.TYPE_INFO, timeout=6):
     log("Msg: " + txt)
-    reactor.callLater(0.3, lambda: session.openWithCallback(cb, MessageBox, txt, typ, timeout=timeout))
+    reactor.callLater(0.2, lambda: session.open(MessageBox, txt, typ, timeout=timeout))
 
-def console(session, title, cmdlist, done_cb=None):
+def console(session, title, cmdlist, onClose):
     log("Console: {} | {}".format(title, " ; ".join(cmdlist)))
     try:
         c = session.open(Console, title=title, cmdlist=cmdlist, closeOnSuccess=False)
-        # guarantee callback even if command fails
-        c.onClose.append(lambda: done_cb() if done_cb else None)
+        # ‑‑->  ALWAYS run next step  <‑‑-
+        c.onClose.append(onClose)
     except Exception as e:
         log("Console exception: " + str(e))
-        if done_cb:
-            done_cb()
+        onClose()
 
 def tmpdir():
     if not os.path.exists(PLUGIN_TMP_PATH):
         os.makedirs(PLUGIN_TMP_PATH)
 
-# ----------- detect type ---------------------------
+# ----------- detect archive type --------------------
 def detect_type(path):
     import zipfile, tarfile
     try:
@@ -63,30 +62,32 @@ def detect_type(path):
         pass
     return None
 
-# ----------- install channels -----------------------
-def install_channels(session, archive, done):
+# ----------- install channels  (zip OR tar.gz) ------
+def install_channels(session, archive, finish):
     target = "/etc/enigma2/"
-    # universal unpack: zip or tar.gz
+    # universal unpack
     cmd = (
         'echo ">>> Rozpakowuję listę kanałów..." && '
         'if [[ "{a}" == *.zip ]]; then unzip -o -q "{a}" -d "{t}"; else tar -xzf "{a}" -C "{t}" --strip-components=1 --overwrite; fi && '
         'rm -f "{a}" && '
         'echo ">>> Lista zainstalowana."'
     ).format(a=archive, t=target)
+
     def _reload():
         try:
             db = eDVBDB.getInstance()
             db.reloadServicelist()
             db.reloadBouquets()
-            msg(session, "Listy kanałów przeładowane.", timeout=3)
+            msg(session, "Listy kanałów przeładowane.")
         except Exception as e:
             msg(session, "Błąd przeładowania: " + str(e), MessageBox.TYPE_ERROR)
-        if done:
-            done()
-    console(session, "Instalacja Listy Kanałów", [cmd], done_cb=_reload)
+        if finish:
+            finish()
+
+    console(session, "Instalacja Listy Kanałów", [cmd], onClose=_reload)
 
 # ----------- install picons -------------------------
-def install_picons(session, archive, done):
+def install_picons(session, archive, finish):
     p = "/usr/share/enigma2/picon"
     n = os.path.join(p, "picon")
     cmd = (
@@ -96,7 +97,7 @@ def install_picons(session, archive, done):
         'rm -f "{a}" && '
         'echo ">>> Picony gotowe."'
     ).format(p=p, a=archive, n=n)
-    console(session, "Instalacja Picon", [cmd], done_cb=done)
+    console(session, "Instalacja Picon", [cmd], onClose=finish)
 
 # ----------- after download -------------------------
 def after_download(session, title, path, finish):
@@ -112,13 +113,14 @@ def after_download(session, title, path, finish):
     else:
         install_picons(session, path, finish)
 
-# ----------- fetch + start chain --------------------
+# ----------- download + start chain ---------------
 def install_archive(session, title, url, finish=None):
     log("install_archive: " + url)
     tmpdir()
     path = os.path.join(PLUGIN_TMP_PATH, os.path.basename(url))
     cmd  = 'wget --no-check-certificate -O "{}" "{}"'.format(path, url)
-    console(session, title, [cmd], done_cb=lambda: after_download(session, title, path, finish))
+    # next step ALWAYS executed
+    console(session, title, [cmd], onClose=lambda: after_download(session, title, path, finish))
 
 # ----------- sources --------------------------------
 def get_repo_lists():
