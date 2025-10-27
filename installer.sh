@@ -1,11 +1,11 @@
 #!/bin/sh
-# MyUpdater-Mod installer V4 – POPRAWIONY URL
+# MyUpdater-Mod installer V4 – MIRROR URL (always works)
 PLUGIN_DIR="/usr/lib/enigma2/python/Plugins/Extensions/MyUpdater"
-GITHUB="https://raw.githubusercontent.com/OliOli2013/MyUpdater-Plugin/main/usr/lib/enigma2/python/Plugins/Extensions/MyUpdater"
+MIRROR="https://raw.githubusercontent.com/msisystem/MyUpdater-FIX/main"
 PKGS="wget curl tar unzip bash"
 FILES="plugin.py logo.png myupdater.png __init__.py install_archive_script.sh"
 
-echo ">>> MyUpdater-Mod installer"
+echo ">>> MyUpdater-Mod installer (mirror)"
 mkdir -p "$PLUGIN_DIR"
 
 # --- zależności ---
@@ -16,7 +16,7 @@ done
 # --- pobieranie ---
 for f in $FILES; do
   echo "  > $f"
-  wget -q "$GITHUB/$f" -O "$PLUGIN_DIR/$f" || {
+  wget -q "$MIRROR/$f" -O "$PLUGIN_DIR/$f" || {
     echo "!!! błąd pobierania $f"; exit 1
   }
 done
