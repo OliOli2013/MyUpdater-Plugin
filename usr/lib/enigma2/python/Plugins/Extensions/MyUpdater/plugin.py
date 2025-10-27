@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-#  MyUpdater  V4.4  –  always install & return
+#  MyUpdater  V4  –  always install & return
 from __future__ import print_function, absolute_import
 from enigma import eDVBDB
 from Screens.Screen import Screen
@@ -17,7 +17,7 @@ from threading import Thread
 
 PLUGIN_PATH   = os.path.dirname(os.path.realpath(__file__))
 PLUGIN_TMP_PATH = "/tmp/MyUpdater/"
-VER           = "V4.4"
+VER           = "V4"
 LOG_FILE      = "/tmp/MyUpdater_install.log"
 
 def log(msg):
