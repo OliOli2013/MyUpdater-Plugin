@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-#  MyUpdater  V4.4  –  always install & return
+#  MyUpdater  V4  –  always install & return
 from __future__ import print_function, absolute_import
 from enigma import eDVBDB
 from Screens.Screen import Screen
@@ -17,7 +17,7 @@ from threading import Thread
 
 PLUGIN_PATH   = os.path.dirname(os.path.realpath(__file__))
 PLUGIN_TMP_PATH = "/tmp/MyUpdater/"
-VER           = "V4.4"
+VER           = "V4" # <-- ZMIANA WERSJI
 LOG_FILE      = "/tmp/MyUpdater_install.log"
 
 def log(msg):
@@ -65,7 +65,7 @@ def detect_type(path):
 # ----------- install channels  (zip OR tar.gz) ------
 def install_channels(session, archive, finish):
     target = "/etc/enigma2/"
-    # --- NOWA, BARDZIEJ ROZBUDOWANA KOMENDA ---
+    # --- POPRAWKA: Użycie 'xargs' zamiast 'find -exec' ---
     cmd = (
         'echo ">>> Rozpakowuję listę kanałów..." && '
         'TDIR="/tmp/MyUpdater_chlist" && rm -rf "$TDIR" && mkdir -p "$TDIR" && '
@@ -82,14 +82,15 @@ def install_channels(session, archive, finish):
         
         'if [ -n "$FILES" ]; then '
         '    echo ">>> Znaleziono pliki list. Przenoszę..." && '
-        '    find "$TDIR" -type f \( -name "lamedb" -o -name "*.tv" -o -name "*.radio" \) -exec mv -f {{}} "{t}" \; && '
+        # Używamy xargs, jest bardziej niezawodne w busybox
+        '    find "$TDIR" -type f \( -name "lamedb" -o -name "*.tv" -o -name "*.radio" \) | xargs -r -I % mv -f % "{t}" && '
         '    echo ">>> Pliki przeniesione." && '
         '    rm -rf "$TDIR" && rm -f "{a}" && '
         '    echo ">>> Lista zainstalowana."; '
         'else '
         '    echo ">>> BŁĄD: Nie znaleziono plików list (lamedb, *.tv) w archiwum!" && '
         '    rm -rf "$TDIR" && rm -f "{a}" && '
-        '    exit 1; ' # Zwróć błąd, aby konsola pokazała problem
+        '    exit 1; '
         'fi'
     ).format(a=archive, t=target)
 
@@ -201,14 +202,14 @@ class Fantastic(Screen):
                                     ("4. Aktualizacja Wtyczki", "plugin_update"),
                                     ("5. Informacja o Wtyczce", "plugin_info")])
         self["info"]    = Label("Wybierz opcję i naciśnij OK")
-        self["version"] = Label("Wersja: " + VER)
+        self["version"] = Label("Wersja: " + VER) # <-- ZMIANA WERSJI
         self["actions"] = ActionMap(["WizardActions", "DirectionActions"],
                                     {"ok": self.runMenuOption, "back": self.close}, -1)
         tmpdir()
         if fileExists(LOG_FILE):
             try: os.remove(LOG_FILE)
             except: pass
-        log("MyUpdater Mod {} started".format(VER))
+        log("MyUpdater Mod {} started".format(VER)) # <-- ZMIANA WERSJI
 
     def runMenuOption(self):
         sel = self["menu"].getCurrent()
@@ -300,7 +301,9 @@ class Fantastic(Screen):
         if not online:
             msg(self.session, "Nie udało się sprawdzić wersji.", MessageBox.TYPE_ERROR)
             return
-        if online != VER:
+        
+        # Sprawdzamy tylko główną wersję (V4), ignorując .4
+        if online and not online.startswith(VER):
             txt = "Dostępna nowa wersja: {}\nTwoja: {}\nZaktualizować?".format(online, VER)
             self.session.openWithCallback(lambda ans: self._doUpdate(inst_url) if ans else None,
                                           MessageBox, txt, type=MessageBox.TYPE_YESNO, title="Aktualizacja")
@@ -315,7 +318,7 @@ class Fantastic(Screen):
         txt = ("MyUpdater (Mod 2025) {}\n\n"
                "Przebudowa: Paweł Pawełek\n"
                "Wtyczka bazuje na PanelAIO.\n\n"
-               "Oryginał: Sancho, gut").format(VER)
+               "Oryginał: Sancho, gut").format(VER) # <-- ZMIANA WERSJI
         self.session.open(MessageBox, txt, MessageBox.TYPE_INFO)
 
 # ----------- plugin entry -----------------------------
@@ -324,6 +327,6 @@ def main(session, **kwargs):
 
 def Plugins(**kwargs):
     return [PluginDescriptor(name="MyUpdater",
-                            description="MyUpdater Mod {} (PanelAIO)".format(VER),
+                            description="MyUpdater Mod {} (PanelAIO)".format(VER), # <-- ZMIANA WERSJI
                             where=PluginDescriptor.WHERE_PLUGINMENU,
                             icon="myupdater.png", fnc=main)]
