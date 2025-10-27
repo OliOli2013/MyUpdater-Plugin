@@ -1,140 +1,131 @@
-#!/bin/sh
-# Skrypt install_archive_script.sh (v9) - Bazuje na wersji użytkownika (bez czyszczenia), ulepszone logowanie.
+def install_archive(session, title, url, callback_on_finish=None, force_mode=None):
+    """
+    force_mode: None | "picons" | "channels"
+    Autowykrywa typ archiwum po zawartości. Dla .zip list kanałów rozpakowuje do /etc/enigma2.
+    """
+    log_message("--- install_archive START ---")
+    log_message("URL received: {}".format(url))
+    log_message("Title received: {}".format(title))
+    log_message("Force mode: {}".format(force_mode))
 
-# set -e # Usunięto set -e, aby skrypt kontynuował mimo błędów kopiowania
+    prepare_tmp_dir()
+    tmp_archive_path = os.path.join(PLUGIN_TMP_PATH, os.path.basename(url))
 
-LOG_FILE="/tmp/aio_install.log" # Log file for debugging
+    # 1) Pobranie ARCHIWUM (w Pythonie, żeby móc je zbadać przed budową komendy)
+    try:
+        cmd = 'wget --no-check-certificate -O "{}" "{}"'.format(tmp_archive_path, url)
+        log_message("Downloading archive: {}".format(cmd))
+        p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        out, err = p.communicate()
+        if p.returncode != 0 or not fileExists(tmp_archive_path) or os.path.getsize(tmp_archive_path) == 0:
+            show_message_compat(session, "Nie udało się pobrać archiwum.", MessageBox.TYPE_ERROR)
+            log_message("Download failed: rc={}, err={}".format(p.returncode, err))
+            if callback_on_finish:
+                try: callback_on_finish()
+                except Exception as e: log_message("Callback error after download fail: {}".format(e))
+            return
+    except Exception as e:
+        log_message("Exception while downloading: {}".format(e))
+        show_message_compat(session, "Błąd pobierania archiwum.", MessageBox.TYPE_ERROR)
+        if callback_on_finish:
+            try: callback_on_finish()
+            except: pass
+        return
 
-# Start logging
-echo "--- START install_archive_script.sh (v9 - no clean) ---" > "$LOG_FILE"
-echo "Argumenty: \$1='$1' \$2='$2'" >> "$LOG_FILE"
-date >> "$LOG_FILE"
+    # 2) Ustalenie typu na podstawie zawartości (chyba że wymuszono force_mode)
+    archive_lower = tmp_archive_path.lower()
+    import zipfile, tarfile
+    detected_mode = None  # "picons" albo "channels"
 
-DOWNLOADED_FILE_PATH="$1"
-ARCHIVE_TYPE="$2"
-# ERROR_MSG="$3" # Argument $3 nie jest już potrzebny, bo nie przerywamy przy błędach rozpakowania od razu
+    try:
+        if zipfile.is_zipfile(tmp_archive_path):
+            with zipfile.ZipFile(tmp_archive_path, 'r') as zf:
+                names = [n.lower() for n in zf.namelist()]
+        elif archive_lower.endswith(('.tar.gz', '.tgz')) and tarfile.is_tarfile(tmp_archive_path):
+            with tarfile.open(tmp_archive_path, 'r:gz') as tf:
+                names = [m.name.lower() for m in tf.getmembers() if m.isfile()]
+        else:
+            show_message_compat(session, "Nieobsługiwany format archiwum.", MessageBox.TYPE_ERROR)
+            log_message("Unsupported archive format: {}".format(tmp_archive_path))
+            if callback_on_finish:
+                try: callback_on_finish()
+                except: pass
+            return
 
-TMP_EXTRACT_DIR="/tmp/list_extract_tmp"
+        has_png = any(n.endswith('.png') for n in names)
+        has_picon_dir = any('/picon/' in n or n.startswith('picon/') for n in names)
+        has_tv = any(n.endswith('.tv') for n in names)
+        has_lamedb = any('lamedb' in n for n in names)
+        has_bouquets = any('bouquets.' in n for n in names)
 
-echo "--> Przygotowuję katalog tymczasowy: $TMP_EXTRACT_DIR ..." | tee -a "$LOG_FILE"
-rm -rf "$TMP_EXTRACT_DIR" && mkdir -p "$TMP_EXTRACT_DIR"
-if [ $? -ne 0 ]; then
-    echo "!!! KRYTYCZNY BŁĄD: Nie udało się utworzyć $TMP_EXTRACT_DIR!" | tee -a "$LOG_FILE"
-    exit 1
-fi
-echo "--> Katalog tymczasowy gotowy." >> "$LOG_FILE"
+        log_message("Archive scan -> png:{}, picon_dir:{}, tv:{}, lamedb:{}, bouquets:{}".format(
+            has_png, has_picon_dir, has_tv, has_lamedb, has_bouquets
+        ))
 
-# Rozpakowywanie
-EXIT_CODE=1
-echo "--> Rozpakowuję archiwum ($ARCHIVE_TYPE)..." | tee -a "$LOG_FILE"
-if [ "$ARCHIVE_TYPE" = "zip" ]; then
-    if ! command -v unzip >/dev/null 2>&1; then
-        echo "!!! KRYTYCZNY BŁĄD: Narzędzie 'unzip' nie jest dostępne." | tee -a "$LOG_FILE"
-        exit 1
-    fi
-    unzip -o "$DOWNLOADED_FILE_PATH" -d "$TMP_EXTRACT_DIR" >> "$LOG_FILE" 2>&1
-    EXIT_CODE=$?
-elif [ "$ARCHIVE_TYPE" = "tar.gz" ]; then
-    if ! command -v tar >/dev/null 2>&1; then
-        echo "!!! KRYTYCZNY BŁĄD: Narzędzie 'tar' nie jest dostępne." | tee -a "$LOG_FILE"
-        exit 1
-    fi
-    tar -xzf "$DOWNLOADED_FILE_PATH" -C "$TMP_EXTRACT_DIR" >> "$LOG_FILE" 2>&1
-    EXIT_CODE=$?
-else
-    echo "!!! KRYTYCZNY BŁĄD: Nieobsługiwany format archiwum '$ARCHIVE_TYPE'." | tee -a "$LOG_FILE"
-    rm -f "$DOWNLOADED_FILE_PATH" # Cleanup downloaded file on error
-    exit 1
-fi
+        if force_mode in ('picons', 'channels'):
+            detected_mode = force_mode
+        else:
+            # jeśli są pliki list (tv/lamedb/bouquets) => channels; w przeciwnym razie picons
+            if has_tv or has_lamedb or has_bouquets:
+                detected_mode = "channels"
+            elif has_png or has_picon_dir:
+                detected_mode = "picons"
+            else:
+                # domyślnie spróbuj jako "channels" (bezpieczniej dla systemu)
+                detected_mode = "channels"
 
-if [ $EXIT_CODE -ne 0 ]; then
-    echo "!!! BŁĄD PODCZAS ROZPAKOWYWANIA (kod: $EXIT_CODE)! Sprawdź $LOG_FILE. Przerywam." | tee -a "$LOG_FILE"
-    rm -f "$DOWNLOADED_FILE_PATH" # Cleanup
-    rm -rf "$TMP_EXTRACT_DIR"
-    exit 1
-fi
-echo "--> Rozpakowywanie zakończone. Zawartość $TMP_EXTRACT_DIR:" >> "$LOG_FILE"
-ls -R "$TMP_EXTRACT_DIR" >> "$LOG_FILE" 2>&1
+        log_message("Detected mode: {}".format(detected_mode))
+    except Exception as e:
+        log_message("Archive content detection failed: {}".format(e))
+        # Jeśli nie udało się wykryć – lepiej zainstalować jako listę (do /etc/enigma2), a nie zaśmiecać picon
+        detected_mode = force_mode or "channels"
 
-# --- Wyszukiwanie katalogu z lamedb ---
-echo "--> Wyszukuję katalog z plikiem 'lamedb'..." >> "$LOG_FILE"
-SOURCE_DIR=""
-FOUND_LAMEDB_PATH=$(find "$TMP_EXTRACT_DIR" -name "lamedb" -type f -print -quit)
+    # 3) Zbuduj właściwą komendę do konsoli (tylko rozpakowanie + sprzątanie)
+    if detected_mode == "picons":
+        picon_path = "/usr/share/enigma2/picon"
+        nested_picon_path = os.path.join(picon_path, "picon")
+        full_command = (
+            "echo '>>> Tworzenie katalogu picon (jeśli nie istnieje): {picon_path}' && "
+            "mkdir -p {picon_path} && "
+            "echo '>>> Rozpakowywanie picon (unzip/tar)...' && "
+            "{extract_cmd} && "
+            "echo '>>> Sprawdzanie zagnieżdżonego katalogu...' && "
+            "if [ -d \"{nested_path}\" ]; then echo '> Przenoszenie z {nested_path} do {picon_path}'; mv -f \"{nested_path}\"/* \"{picon_path}/\"; rmdir \"{nested_path}\"; else echo '> Brak zagnieżdżonego katalogu.'; fi && "
+            "rm -f \"{archive_path}\" && "
+            "echo '>>> Picony zostały pomyślnie zainstalowane.' && sleep 3"
+        ).format(
+            picon_path=picon_path,
+            nested_path=nested_picon_path,
+            archive_path=tmp_archive_path,
+            extract_cmd=("unzip -o -q \"{a}\" -d \"{dst}\" || tar -xzf \"{a}\" -C \"{dst}\""
+                         ).format(a=tmp_archive_path, dst=picon_path)
+        )
+    else:  # CHANNELS
+        target_dir = "/etc/enigma2/"
+        extract_dir = os.path.join(PLUGIN_TMP_PATH, "extract")
+        full_command = (
+            "echo '>>> Przygotowanie katalogów...' && "
+            "mkdir -p {extract_dir} {target_dir} && "
+            "echo '>>> Rozpakowywanie listy do katalogu tymczasowego...' && "
+            "(unzip -o -q \"{archive_path}\" -d \"{extract_dir}\" || tar -xzf \"{archive_path}\" -C \"{extract_dir}\") && "
+            "echo '>>> Kopiowanie plików list (.tv, lamedb*, bouquets.*) do {target_dir} ...' && "
+            "find \"{extract_dir}\" -maxdepth 5 -type f \\( -name '*.tv' -o -name 'lamedb*' -o -name 'bouquets.*' \\) -print -exec cp -f {{}} {target_dir} \\; && "
+            "rm -rf \"{extract_dir}\" && "
+            "rm -f \"{archive_path}\" && "
+            "echo '>>> Lista kanałów została pomyślnie zainstalowana.' && sleep 3"
+        ).format(
+            extract_dir=extract_dir,
+            target_dir=target_dir,
+            archive_path=tmp_archive_path
+        )
 
-if [ -n "$FOUND_LAMEDB_PATH" ]; then
-    SOURCE_DIR=$(dirname "$FOUND_LAMEDB_PATH")
-    echo "--> Znaleziono główny katalog z listą kanałów: $SOURCE_DIR" | tee -a "$LOG_FILE"
-else
-    echo "!!! KRYTYCZNY BŁĄD: Nie znaleziono pliku 'lamedb' w rozpakowanym archiwum. Anuluję." | tee -a "$LOG_FILE"
-    rm -f "$DOWNLOADED_FILE_PATH" # Cleanup
-    rm -rf "$TMP_EXTRACT_DIR"
-    exit 1
-fi
-# --- Koniec wyszukiwania ---
+    def run_callback_safely():
+        if callback_on_finish:
+            log_message("Console finished, executing callback.")
+            try:
+                callback_on_finish()
+            except Exception as cb_e:
+                log_message("!!! EXCEPTION in callback after console finish: {}".format(cb_e))
 
-# --- Kopiowanie Plików (nadpisywanie) ---
-echo "--> Rozpoczynam kopiowanie plików (nadpisywanie)..." | tee -a "$LOG_FILE"
-TARGET_ENIGMA2_DIR="/etc/enigma2"
-TARGET_TUXBOX_DIR="/etc/tuxbox"
-COPY_ERRORS=0
-
-# Kopiowanie wszystkich plików z znalezionego katalogu źródłowego do /etc/enigma2
-echo "--> Kopiowanie z '$SOURCE_DIR' do '$TARGET_ENIGMA2_DIR/'..." >> "$LOG_FILE"
-cp -rf "$SOURCE_DIR"/* "$TARGET_ENIGMA2_DIR/" 2>> "$LOG_FILE" || { echo "!!! OSTRZEŻENIE: Wystąpiły problemy podczas kopiowania plików do $TARGET_ENIGMA2_DIR (szczegóły w $LOG_FILE)"; COPY_ERRORS=1; }
-
-# Kopiowanie satellites.xml, jeśli istnieje
-if [ -f "$SOURCE_DIR/satellites.xml" ]; then
-    echo "--> Kopiowanie satellites.xml do '$TARGET_TUXBOX_DIR/'..." >> "$LOG_FILE"
-    # Upewnij się, że katalog /etc/tuxbox istnieje
-    mkdir -p "$TARGET_TUXBOX_DIR" >> "$LOG_FILE" 2>&1
-    cp -f "$SOURCE_DIR/satellites.xml" "$TARGET_TUXBOX_DIR/" 2>> "$LOG_FILE" || { echo "!!! OSTRZEŻENIE: Nie udało się skopiować satellites.xml (szczegóły w $LOG_FILE)"; COPY_ERRORS=1; }
-fi
-echo "--> Kopiowanie plików zakończone." >> "$LOG_FILE"
-# --- Koniec Kopiowania ---
-
-# --- Przeładowanie Bukietów ---
-# Sprawdźmy, czy skrypt reload_bouquets.sh istnieje w katalogu wtyczki
-PLUGIN_SCRIPT_DIR=$(dirname "$(readlink -f "$0")") # Pobierz katalog bieżącego skryptu
-RELOAD_SCRIPT_PATH="$PLUGIN_SCRIPT_DIR/reload_bouquets.sh"
-echo "--> Próba przeładowania bukietów przy użyciu '$RELOAD_SCRIPT_PATH'..." >> "$LOG_FILE"
-
-if [ -f "$RELOAD_SCRIPT_PATH" ]; then
-    if [ -x "$RELOAD_SCRIPT_PATH" ]; then
-        if "$RELOAD_SCRIPT_PATH"; then
-            echo "--> Skrypt reload_bouquets.sh zakończony pomyślnie." >> "$LOG_FILE"
-        else
-            RELOAD_EXIT_CODE=$?
-            echo "!!! OSTRZEŻENIE: Skrypt reload_bouquets.sh zwrócił błąd (kod: $RELOAD_EXIT_CODE). Może być konieczny restart GUI." | tee -a "$LOG_FILE"
-            COPY_ERRORS=1 # Traktujemy to jako potencjalny problem
-        fi
-    else
-        echo "!!! KRYTYCZNY BŁĄD: Skrypt reload_bouquets.sh '$RELOAD_SCRIPT_PATH' nie ma uprawnień do wykonywania!" | tee -a "$LOG_FILE"
-        echo "Nadaj uprawnienia: chmod +x '$RELOAD_SCRIPT_PATH'"
-        COPY_ERRORS=1 # To jest krytyczny błąd
-    fi
-else
-    echo "!!! KRYTYCZNY BŁĄD: Skrypt reload_bouquets.sh '$RELOAD_SCRIPT_PATH' nie został znaleziony!" | tee -a "$LOG_FILE"
-    COPY_ERRORS=1 # To jest krytyczny błąd
-fi
-# --- Koniec Przeładowania ---
-
-# --- Czyszczenie ---
-echo "--> Usuwam pliki tymczasowe..." | tee -a "$LOG_FILE"
-rm -rf "$TMP_EXTRACT_DIR" >> "$LOG_FILE" 2>&1
-rm -f "$DOWNLOADED_FILE_PATH" >> "$LOG_FILE" 2>&1
-echo "--> Pliki tymczasowe usunięte." >> "$LOG_FILE"
-# --- Koniec Czyszczenia ---
-
-# --- Komunikat końcowy ---
-echo "--- KONIEC install_archive_script.sh (v9) ---" >> "$LOG_FILE"
-if [ $COPY_ERRORS -ne 0 ]; then
-    echo ">>> Instalacja ZAKOŃCZONA Z OSTRZEŻENIAMI." | tee -a "$LOG_FILE"
-    echo ">>> Sprawdź listę kanałów. W razie problemów może być konieczny restart GUI." | tee -a "$LOG_FILE"
-    echo ">>> Szczegółowe logi znajdziesz w pliku: $LOG_FILE" | tee -a "$LOG_FILE"
-else
-    echo ">>> Instalacja listy kanałów ZAKOŃCZONA pomyślnie." | tee -a "$LOG_FILE"
-    echo ">>> Listy powinny być już widoczne." | tee -a "$LOG_FILE"
-fi
-sleep 3 # Daj użytkownikowi chwilę na przeczytanie
-
-exit 0
+    console_screen_open(session, title, [full_command], callback=run_callback_safely, close_on_finish=True)
+    log_message("--- install_archive END ---")
