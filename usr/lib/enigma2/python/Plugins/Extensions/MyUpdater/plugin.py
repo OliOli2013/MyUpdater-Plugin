@@ -3,6 +3,7 @@
 # MyUpdater (Mod 2025) V4
 # Bazuje na oryginalnej wtyczce MyUpdater (Sancho, gut)
 # Przebudowane z użyciem kodu PanelAIO (Paweł Pawełek)
+# Wersja z dodatkowym logowaniem warunku if/elif w install_archive
 #
 from __future__ import print_function
 from __future__ import absolute_import
@@ -24,6 +25,7 @@ import json
 import datetime
 from twisted.internet import reactor
 from threading import Thread
+import traceback # Dodano import traceback do logowania pełnych błędów
 
 # === SEKCJA GLOBALNYCH ZMIENNYCH ===
 PLUGIN_PATH = os.path.dirname(os.path.realpath(__file__))
@@ -34,23 +36,60 @@ LOG_FILE = "/tmp/MyUpdater_install.log" # Plik logu dla instalacji
 # Funkcja logująca do pliku
 def log_message(message):
     try:
-        # Dodano tryb 'a' (append) zamiast domyślnego 'w' (write), aby nie nadpisywać logu przy każdym komunikacie
         with open(LOG_FILE, "a") as f:
-            f.write(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") + " - " + str(message) + "\n") # Dodano str() dla pewności
+            f.write(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") + " - " + str(message) + "\n")
     except Exception as e:
         print("[MyUpdater Mod] Error writing to log file:", e)
 
 # === FUNKCJE POMOCNICZE ===
 
 def show_message_compat(session, message, message_type=MessageBox.TYPE_INFO, timeout=10, on_close=None):
-    log_message("MessageBox: " + message)
+    log_message("MessageBox: " + str(message)) # Dodano str()
     reactor.callLater(0.2, lambda: session.openWithCallback(on_close, MessageBox, message, message_type, timeout=timeout))
 
 def console_screen_open(session, title, cmds_with_args, callback=None, close_on_finish=False):
     cmds_list = cmds_with_args if isinstance(cmds_with_args, list) else [cmds_with_args]
-    # Usunięto finishedCallback, onClose jest bardziej standardowe
     log_message("Console Open: Title='{}', Cmd='{}'".format(title, "; ".join(cmds_list)))
-    reactor.callLater(0.1, lambda: session.open(Console, title=title, cmdlist=cmds_list, closeOnSuccess=close_on_finish).onClose.append(callback) if callback else session.open(Console, title=title, cmdlist=cmds_list, closeOnSuccess=close_on_finish))
+    # Używamy finishedCallback, jak sugeruje dokumentacja dla nowszych E2, onClose jako fallback
+    try:
+        console_instance = session.open(Console, title=title, cmdlist=cmds_list, closeOnSuccess=close_on_finish)
+        if callback:
+            # Preferuj finishedCallback, jeśli istnieje
+            if hasattr(console_instance, 'finishedCallback'):
+                 console_instance.finishedCallback.append(callback)
+                 log_message("Attached callback to finishedCallback.")
+            elif hasattr(console_instance, 'onClose'):
+                 console_instance.onClose.append(callback)
+                 log_message("Attached callback to onClose.")
+            else:
+                 log_message("Warning: Could not attach callback to Console.")
+        # Otwieranie przez reactor może być nadal potrzebne, jeśli wywoływane z wątku
+        # Ale zróbmy to tylko jeśli nie jesteśmy w głównym wątku
+        # is_main_thread = not reactor.running or reactor.callFromThread(lambda: True) # Ta metoda może być zawodna
+        # Na razie zostawmy reactor.callLater dla bezpieczeństwa
+        # reactor.callLater(0.1, lambda: _open_console_safely(session, title, cmds_list, callback, close_on_finish))
+
+    except Exception as e:
+        log_message("!!! EXCEPTION in console_screen_open: {}".format(e))
+        log_message(traceback.format_exc())
+
+# Funkcja pomocnicza dla console_screen_open (choć może nie być potrzebna)
+# def _open_console_safely(session, title, cmds_list, callback, close_on_finish):
+#     try:
+#         console_instance = session.open(Console, title=title, cmdlist=cmds_list, closeOnSuccess=close_on_finish)
+#         if callback:
+#             if hasattr(console_instance, 'finishedCallback'):
+#                  console_instance.finishedCallback.append(callback)
+#                  log_message("Attached callback to finishedCallback (delayed).")
+#             elif hasattr(console_instance, 'onClose'):
+#                  console_instance.onClose.append(callback)
+#                  log_message("Attached callback to onClose (delayed).")
+#             else:
+#                  log_message("Warning: Could not attach callback to Console (delayed).")
+#     except Exception as e:
+#         log_message("!!! EXCEPTION in _open_console_safely: {}".format(e))
+#         log_message(traceback.format_exc())
+
 
 def prepare_tmp_dir():
     if not os.path.exists(PLUGIN_TMP_PATH):
@@ -61,33 +100,42 @@ def prepare_tmp_dir():
             log_message("Error creating tmp dir: {}".format(e))
             print("[MyUpdater Mod] Error creating tmp dir:", e)
 
-# POPRAWIONA funkcja install_archive z BARDZO szczegółowym logowaniem
+# POPRAWIONA funkcja install_archive z BARDZO szczegółowym logowaniem warunku if/elif
 def install_archive(session, title, url, callback_on_finish=None):
     log_message("--- install_archive START ---")
     log_message("URL received: {}".format(url))
     log_message("Title received: {}".format(title))
 
-    if not url.endswith((".zip", ".tar.gz", ".tgz")):
+    is_zip = url.lower().endswith(".zip") # Sprawdzamy małe litery dla pewności
+    is_tar = url.lower().endswith((".tar.gz", ".tgz")) # Sprawdzamy małe litery
+
+    log_message("Checking URL ends with .zip: {}".format(is_zip))
+    log_message("Checking URL ends with .tar.gz/.tgz: {}".format(is_tar))
+
+    if not is_zip and not is_tar:
         msg = "Nieobsługiwany format archiwum! URL: {}".format(url)
         log_message("Error: " + msg)
         show_message_compat(session, msg, message_type=MessageBox.TYPE_ERROR)
-        if callback_on_finish: callback_on_finish()
+        if callback_on_finish:
+            try: callback_on_finish()
+            except Exception as cb_e: log_message("Exception in callback (unsupported format): {}".format(cb_e))
         log_message("--- install_archive END (Unsupported format) ---")
         return
 
-    # Określenie typu archiwum
-    archive_type = "zip" if url.endswith(".zip") else "tar.gz"
+    # Określenie typu archiwum JESZCZE RAZ dla pewności
+    archive_type = "zip" if is_zip else "tar.gz"
+    log_message("Determined archive_type: '{}'".format(archive_type)) # Powtórzone logowanie dla debugowania
+
     prepare_tmp_dir()
     tmp_archive_path = os.path.join(PLUGIN_TMP_PATH, os.path.basename(url))
     download_cmd = "wget --no-check-certificate -O \"{}\" \"{}\"".format(tmp_archive_path, url)
-    log_message("Determined archive_type: '{}'".format(archive_type))
     log_message("Temp archive path: '{}'".format(tmp_archive_path))
 
     full_command = "" # Zainicjuj pustą komendę
 
     # Logika dla ZIP (picon)
     if archive_type == "zip":
-        log_message("*** EXECUTING ZIP LOGIC (PICONS) ***") # Logowanie wejścia do bloku ZIP
+        log_message("*** EXECUTING ZIP LOGIC (PICONS) ***")
         picon_path = "/usr/share/enigma2/picon"
         log_message("Target directory (picons): {}".format(picon_path))
         nested_picon_path = os.path.join(picon_path, "picon")
@@ -96,7 +144,7 @@ def install_archive(session, title, url, callback_on_finish=None):
             "{download_cmd} && "
             "echo '>>> Tworzenie katalogu picon (jeśli nie istnieje): {picon_path}' && "
             "mkdir -p {picon_path} && "
-            "echo '>>> Rozpakowywanie archiwum picon (unzip)...' && " # Wyraźnie wskazano unzip
+            "echo '>>> Rozpakowywanie archiwum picon (unzip)...' && "
             "unzip -o -q \"{archive_path}\" -d \"{picon_path}\" && "
             "echo '>>> Sprawdzanie zagnieżdżonego katalogu...' && "
             "if [ -d \"{nested_path}\" ]; then echo '> Przenoszenie z {nested_path} do {picon_path}'; mv -f \"{nested_path}\"/* \"{picon_path}/\"; rmdir \"{nested_path}\"; else echo '> Brak zagnieżdżonego katalogu.'; fi && "
@@ -110,14 +158,14 @@ def install_archive(session, title, url, callback_on_finish=None):
             nested_path=nested_picon_path
         )
     # Logika dla TAR.GZ (listy kanałów)
-    elif archive_type == "tar.gz": # Zmieniono else na elif dla pewności
-        log_message("*** EXECUTING TAR.GZ LOGIC (CHANNEL LISTS) ***") # Logowanie wejścia do bloku TAR.GZ
+    elif archive_type == "tar.gz":
+        log_message("*** EXECUTING TAR.GZ LOGIC (CHANNEL LISTS) ***")
         target_dir = "/etc/enigma2/"
         log_message("Target directory (channel list): {}".format(target_dir))
         full_command = (
             "echo '>>> Rozpoczynam pobieranie listy kanałów...' && "
             "{download_cmd} && "
-            "echo '>>> Rozpakowywanie archiwum listy kanałów do {target_dir} (tar)...' && " # Wyraźnie wskazano tar
+            "echo '>>> Rozpakowywanie archiwum listy kanałów do {target_dir} (tar)...' && "
             # Używamy -C {target_dir} i --strip-components=1, dodano -v dla logów
             "tar -xzvf \"{archive_path}\" -C {target_dir} --strip-components=1 --overwrite && "
             "echo '>>> Zawartość {target_dir} PO rozpakowaniu (pliki .tv i lamedb):' && "
@@ -131,18 +179,35 @@ def install_archive(session, title, url, callback_on_finish=None):
             target_dir=target_dir
         )
     else:
-        # Ten blok nie powinien być nigdy osiągnięty z powodu sprawdzenia na początku
-        log_message("!!! INTERNAL ERROR: Unknown archive_type '{}'".format(archive_type))
+        # Ten blok nie powinien być nigdy osiągnięty
+        log_message("!!! INTERNAL ERROR: Unknown archive_type '{}' after initial check".format(archive_type))
         show_message_compat(session, "Wewnętrzny błąd - nieznany typ archiwum!", MessageBox.TYPE_ERROR)
+        if callback_on_finish:
+             try: callback_on_finish()
+             except Exception as cb_e: log_message("Exception in callback (internal error): {}".format(cb_e))
         log_message("--- install_archive END (Internal Error) ---")
         return
 
 
     # Logowanie finalnej komendy przed wykonaniem
-    log_message("Final command to be executed: {}".format(full_command))
+    if full_command:
+        log_message("Final command to be executed: {}".format(full_command))
+        # Wywołanie konsoli - używamy lambda, aby upewnić się, że callback jest wywołany poprawnie
+        def run_callback_safely():
+            if callback_on_finish:
+                log_message("Console finished, executing callback.")
+                try:
+                    callback_on_finish()
+                except Exception as cb_e:
+                    log_message("!!! EXCEPTION in callback after console finish: {}".format(cb_e))
+                    log_message(traceback.format_exc())
+            else:
+                log_message("Console finished, no callback defined.")
 
-    # Wywołanie konsoli
-    console_screen_open(session, title, [full_command], callback=callback_on_finish, close_on_finish=True)
+        console_screen_open(session, title, [full_command], callback=run_callback_safely, close_on_finish=True)
+    else:
+        log_message("!!! Error: full_command is empty before calling console_screen_open.")
+
     log_message("--- install_archive END ---")
 
 
@@ -306,6 +371,7 @@ class Fantastic(Screen):
             install_archive(self.session, title, url, callback_on_finish=lambda: reload_settings_python(self.session))
         except Exception as e:
             log_message("Error processing channel list selection: {}".format(e))
+            log_message(traceback.format_exc()) # Loguj pełny traceback błędu
             print("[MyUpdater Mod] Błąd wyboru listy:", e)
             show_message_compat(self.session, "Błąd wyboru listy.", MessageBox.TYPE_ERROR)
 
@@ -376,7 +442,7 @@ class Fantastic(Screen):
             log_message("Update check complete. Online: '{}', Local: '{}'".format(online_version, VER))
             if online_version != VER:
                 message = "Dostępna jest nowa wersja: {}\nTwoja wersja: {}\n\nCzy chcesz zaktualizować teraz?".format(online_version, VER)
-                self.session.openWithCallback( lambda confirmed: self._doPluginUpdate(installer_url) if confirmed else None, MessageBox, message, type=MessageBox.TYPE_YESNO, title="Dostępna aktualizacja" )
+                self.session.openWithCallback( lambda confirmed: self._doPluginUpdate(installer_url) if confirmed else log_message("Update declined by user."), MessageBox, message, type=MessageBox.TYPE_YESNO, title="Dostępna aktualizacja" )
             else:
                 show_message_compat(self.session, "Używasz najnowszej wersji wtyczki ({}).".format(VER), MessageBox.TYPE_INFO)
         else:
