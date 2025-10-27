@@ -31,10 +31,12 @@ def msg(session, txt, typ=MessageBox.TYPE_INFO, timeout=6):
     log("Msg: " + txt)
     reactor.callLater(0.2, lambda: session.open(MessageBox, txt, typ, timeout=timeout))
 
-def console(session, title, cmdlist, onClose):
+# --- POPRAWIONA FUNKCJA 'console' ---
+def console(session, title, cmdlist, onClose, autoClose=True):
     log("Console: {} | {}".format(title, " ; ".join(cmdlist)))
     try:
-        c = session.open(Console, title=title, cmdlist=cmdlist, closeOnSuccess=False)
+        # Używamy 'autoClose' (domyślnie True) zamiast 'False' na stałe
+        c = session.open(Console, title=title, cmdlist=cmdlist, closeOnSuccess=autoClose)
         # ‑‑->  ALWAYS run next step  <‑‑-
         c.onClose.append(onClose)
     except Exception as e:
@@ -92,7 +94,8 @@ def install_channels(session, archive, finish):
         if finish:
             finish()
 
-    console(session, "Instalacja Listy Kanałów", [cmd], onClose=_reload)
+    # Dodano autoClose=True
+    console(session, "Instalacja Listy Kanałów", [cmd], onClose=_reload, autoClose=True)
 
 # ----------- install picons -------------------------
 def install_picons(session, archive, finish):
@@ -105,7 +108,8 @@ def install_picons(session, archive, finish):
         'rm -f "{a}" && '
         'echo ">>> Picony gotowe."'
     ).format(p=p, a=archive, n=n)
-    console(session, "Instalacja Picon", [cmd], onClose=finish)
+    # Dodano autoClose=True
+    console(session, "Instalacja Picon", [cmd], onClose=finish, autoClose=True)
 
 # ----------- after download -------------------------
 def after_download(session, title, path, finish):
@@ -127,8 +131,8 @@ def install_archive(session, title, url, finish=None):
     tmpdir()
     path = os.path.join(PLUGIN_TMP_PATH, os.path.basename(url))
     cmd  = 'wget --no-check-certificate -O "{}" "{}"'.format(path, url)
-    # next step ALWAYS executed
-    console(session, title, [cmd], onClose=lambda: after_download(session, title, path, finish))
+    # Dodano autoClose=True
+    console(session, title, [cmd], onClose=lambda: after_download(session, title, path, finish), autoClose=True)
 
 # ----------- sources --------------------------------
 def get_repo_lists():
@@ -256,7 +260,8 @@ class Fantastic(Screen):
             cmd = "wget -q https://raw.githubusercontent.com/biko-73/Ncam_EMU/main/installer.sh -O- | sh"
         if cmd:
             msg(self.session, "Instaluję {}...".format(title), timeout=2)
-            console(self.session, title, [cmd])
+            # --- POPRAWKA BŁĘDU: Dodano brakujący argument 'onClose' ---
+            console(self.session, title, [cmd], onClose=lambda: None, autoClose=True)
 
     def runPiconGitHub(self):
         url   = "https://github.com/OliOli2013/PanelAIO-Plugin/raw/main/Picony.zip"
@@ -298,7 +303,8 @@ class Fantastic(Screen):
 
     def _doUpdate(self, url):
         cmd = "wget -q -O - {} | /bin/sh".format(url)
-        console(self.session, "Aktualizacja MyUpdater", [cmd])
+        # --- POPRAWKA BŁĘDU: Dodano brakujący argument 'onClose' ---
+        console(self.session, "Aktualizacja MyUpdater", [cmd], onClose=lambda: None, autoClose=True)
 
     def runInfo(self):
         txt = ("MyUpdater (Mod 2025) {}\n\n"
