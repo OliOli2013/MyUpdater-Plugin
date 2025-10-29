@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
-# MyUpdater Enhanced - Poprawiona inicjalizacja
-# Ten plik jest wymagany przez Enigma2 do prawidłowego działania wtyczki
+# MyUpdater Enhanced - Poprawiona inicjalizacja V5
 
-from . import plugin  # <-- POPRAWKA: Zmieniono 'plugin_enhanced' na 'plugin'
+from . import plugin  # <-- Ta linia importuje "plugin.py" (już po zmianie nazwy)
 
 # Wersja wtyczki
 __version__ = "V5 Enhanced"
