@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 #  MyUpdater Enhanced V5 – Kompletna przebudowa z pełną kompatybilnością
 #  Plik na GitHub jako: plugin_enhanced.py
-#  Wersja 4.2 - Zwiększono opóźnienie msg() dla stabilności
+#  Wersja 4.3 - Użycie reactor.callLater bezpośrednio w callbackach
 from __future__ import print_function, absolute_import
 from enigma import eDVBDB
 from Screens.Screen import Screen
@@ -21,18 +21,18 @@ from threading import Thread
 
 PLUGIN_PATH = os.path.dirname(os.path.realpath(__file__))
 PLUGIN_TMP_PATH = "/tmp/MyUpdater/"
-VER = "V5 Enhanced" # Wersja wewnętrzna nadal może być szczegółowa
+VER = "V5 Enhanced"
 LOG_FILE = "/tmp/MyUpdater_install.log"
 
+# --- Funkcje Pomocnicze (Logowanie, Detekcja, etc.) ---
+# (Bez zmian w log, detect_distribution, get_opkg_command)
 def log(msg):
     try:
         with io.open(LOG_FILE, "a", encoding='utf-8') as f:
             f.write(u"{} - {}\n".format(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), msg))
-    except:
-        pass # Ignoruj błędy zapisu logu
+    except: pass
 
 def detect_distribution():
-    """Detekcja dystrybucji Enigma2"""
     try:
         if os.path.exists("/etc/openatv-release"):
             with open("/etc/openatv-release", 'r') as f: content = f.read().lower()
@@ -42,76 +42,68 @@ def detect_distribution():
         elif os.path.exists("/etc/openpli-release"): return "openpli"
         elif os.path.exists("/etc/vti-version-info"): return "vix"
         else: return "unknown"
-    except Exception as e:
-        log("Error detecting distribution: " + str(e))
-        return "unknown"
+    except Exception as e: log("Error detecting distribution: " + str(e)); return "unknown"
 
 def get_opkg_command():
-    """Zwraca poprawną komendę opkg dla danej dystrybucji"""
     distro = detect_distribution()
     if distro == "openpli": return "opkg --force-overwrite --force-downgrade"
     else: return "opkg --force-overwrite"
 
-#
-# *** ZWIĘKSZONO OPÓŹNIENIE DLA STABILNOŚCI ***
-#
+# Funkcja msg() jest teraz używana tylko do komunikatów *nie* będących callbackami
 def msg(session, txt, typ=MessageBox.TYPE_INFO, timeout=6):
     log("Msg: " + txt)
-    # Przywrócono opóźnienie do 0.2 sekundy
-    reactor.callLater(0.2, lambda: session.open(MessageBox, txt, typ, timeout=timeout))
+    # Używamy małego opóźnienia, ale tylko dla ogólnych komunikatów
+    reactor.callLater(0.1, lambda: session.open(MessageBox, txt, typ, timeout=timeout))
 
 def console(session, title, cmdlist, onClose, autoClose=True):
     log("Console: {} | {}".format(title, " ; ".join(cmdlist)))
     try:
         c = session.open(Console, title=title, cmdlist=cmdlist, closeOnSuccess=autoClose)
-        if onClose: c.onClose.append(onClose)
+        # Używamy funkcji anonimowej (lambda), aby upewnić się, że onClose jest wywoływane bezpiecznie
+        if onClose: c.onClose.append(lambda: safe_callback_call(onClose))
     except Exception as e:
         log("Console exception: " + str(e))
-        if onClose:
-            try: onClose()
-            except Exception as call_e: log("Exception in onClose callback after console error: " + str(call_e))
+        safe_callback_call(onClose) # Spróbuj wywołać callback nawet przy błędzie
+
+def safe_callback_call(callback):
+    """Bezpieczne wywołanie callbacku, łapie wyjątki."""
+    if callback:
+        try:
+            callback()
+        except Exception as e:
+            log("Exception in callback function: " + str(e) + "\n" + traceback.format_exc())
+
 
 def tmpdir():
     if not os.path.exists(PLUGIN_TMP_PATH):
         try: os.makedirs(PLUGIN_TMP_PATH)
         except OSError as e: log("Error creating tmpdir: " + str(e))
 
-
 def reload_settings_python(session, *args):
     try:
         db = eDVBDB.getInstance()
         db.reloadServicelist(); db.reloadBouquets()
-        msg(session, "Listy kanałów przeładowane.", timeout=3)
+        # Używamy reactor.callLater bezpośrednio
+        reactor.callLater(0.2, lambda: session.open(MessageBox, "Listy kanałów przeładowane.", type=MessageBox.TYPE_INFO, timeout=3))
     except Exception as e:
         log("[MyUpdater] Błąd podczas przeładowywania list: " + str(e))
-        msg(session, "Wystąpił błąd podczas przeładowywania list.", MessageBox.TYPE_ERROR)
+        reactor.callLater(0.2, lambda: session.open(MessageBox, "Wystąpił błąd podczas przeładowywania list.", type=MessageBox.TYPE_ERROR))
 
 def install_archive_enhanced(session, title, url, finish=None):
-    """Poprawiona wersja instalacji archiwum"""
     log("install_archive_enhanced: " + url)
     archive_type = ""
     if url.endswith(".zip"): archive_type = "zip"
     elif url.endswith((".tar.gz", ".tgz")): archive_type = "tar.gz"
-    else:
-        msg(session, "Nieobsługiwany format archiwum!", MessageBox.TYPE_ERROR)
-        if finish:
-            try: finish()
-            except Exception as e: log("Error in finish callback (unsupported format): " + str(e))
-        return
+    else: msg(session, "Nieobsługiwany format archiwum!", MessageBox.TYPE_ERROR); safe_callback_call(finish); return
 
     tmpdir()
     tmp_archive_path = os.path.join(PLUGIN_TMP_PATH, os.path.basename(url))
     cmd_chain = []
-
     if "picon" not in title.lower():
-        backup_cmd = "tar -czf /tmp/MyUpdater/backup_$(date +%Y%m%d_%H%M%S).tar.gz -C /etc/enigma2 lamedb *.tv *.radio 2>/dev/null || true"
-        cmd_chain.append(backup_cmd)
-
-    download_cmd = 'wget --no-check-certificate --timeout=30 -t 2 -O "{}" "{}"'.format(tmp_archive_path, url)
-    cmd_chain.append(download_cmd)
-
+        cmd_chain.append("tar -czf /tmp/MyUpdater/backup_$(date +%Y%m%d_%H%M%S).tar.gz -C /etc/enigma2 lamedb *.tv *.radio 2>/dev/null || true")
+    cmd_chain.append('wget --no-check-certificate --timeout=30 -t 2 -O "{}" "{}"'.format(tmp_archive_path, url))
     callback = finish
-
+    
     if "picon" in title.lower() and archive_type == "zip":
         picon_path = "/usr/share/enigma2/picon"; tmp_extract_path = "/tmp/MyUpdater_picon_extract"
         cmd_chain.extend([
@@ -123,37 +115,37 @@ def install_archive_enhanced(session, title, url, finish=None):
             "rm -rf " + tmp_extract_path, "rm -f \"" + tmp_archive_path + "\"",
             "echo '>>> Picony zainstalowane.' && sleep 0.5"
         ])
+        # Callback 'finish' (przekazany z runPiconGitHub) zostaje użyty bez zmian w console()
     
-    else: # Logika dla list kanałów
+    else: # Listy kanałów
         install_script_path = os.path.join(PLUGIN_PATH, "install_archive_script.sh")
         if not os.path.exists(install_script_path):
-             msg(session, "BŁĄD: Brak pliku install_archive_script.sh!", MessageBox.TYPE_ERROR)
+             msg(session, "BŁĄD: Brak install_archive_script.sh!", MessageBox.TYPE_ERROR)
              log("FATAL: install_archive_script.sh not found at " + install_script_path)
-             if finish:
-                 try: finish()
-                 except Exception as e: log("Error in finish callback (missing script): " + str(e))
+             safe_callback_call(finish)
              return
             
-        cmd_chain.extend([
-            "chmod +x \"{}\"".format(install_script_path),
-            "bash {} \"{}\" \"{}\"".format(install_script_path, tmp_archive_path, archive_type)
-        ])
+        cmd_chain.extend(["chmod +x \"{}\"".format(install_script_path), "bash {} \"{}\" \"{}\"".format(install_script_path, tmp_archive_path, archive_type)])
         
         def combined_callback():
-            reload_settings_python(session)
-            if finish: reactor.callLater(0.3, finish)
+            reload_settings_python(session) # Ta funkcja już używa callLater
+            # Wywołaj oryginalny finish również przez callLater dla bezpieczeństwa
+            if finish: reactor.callLater(0.3, lambda: safe_callback_call(finish))
         
         callback = combined_callback
-
+    
     full_command = " && ".join(filter(None, cmd_chain))
     console(session, title, [full_command], onClose=callback, autoClose=True)
 
 def install_oscam_enhanced(session, finish=None):
     distro = detect_distribution()
     def install_callback():
-        msg(session, "Instalacja Oscam zakończona (lub próba). Sprawdź logi.", timeout=4)
-        if finish: try: finish(); except Exception as e: log("Error in Oscam finish callback: "+str(e))
+        # Użyj reactor.callLater bezpośrednio
+        reactor.callLater(0.2, lambda: session.open(MessageBox, "Instalacja Oscam zakończona (lub próba). Sprawdź logi.", type=MessageBox.TYPE_INFO, timeout=4))
+        safe_callback_call(finish)
+
     commands = ["echo '>>> Aktualizacja feed...' && opkg update"]
+    # ... (logika dodawania komend instalacji oscam bez zmian) ...
     if distro == "openpli":
         commands.append("echo '>>> Szukanie oscam w feed (OpenPLI)...' && {} install enigma2-plugin-softcams-oscam 2>/dev/null || echo 'Nie znaleziono'".format(get_opkg_command()))
         commands.append("echo '>>> Próba instalacji z innego źródła...' && wget -q --no-check-certificate https://raw.githubusercontent.com/levi-45/Levi45Emulator/main/installer.sh -O /tmp/oscam_installer.sh && chmod +x /tmp/oscam_installer.sh && /bin/sh /tmp/oscam_installer.sh")
@@ -162,6 +154,8 @@ def install_oscam_enhanced(session, finish=None):
     commands.append("echo '>>> Weryfikacja...' && if [ -f /usr/bin/oscam ] || [ -f /usr/bin/oscam-emu ]; then echo 'Oscam OK!'; else echo 'Uwaga: Brak pliku oscam'; fi")
     console(session, "Instalacja Oscam", commands, onClose=install_callback, autoClose=True)
 
+# --- Funkcje get_repo_lists / get_s4a_lists ---
+# (Bez zmian, używają subprocess.check_output)
 def get_repo_lists():
     url = "https://raw.githubusercontent.com/OliOli2013/PanelAIO-Lists/main/manifest.json"; tmp = os.path.join(PLUGIN_TMP_PATH, "manifest.json"); lst = []
     try:
@@ -247,7 +241,7 @@ class MyUpdaterEnhanced(Screen):
         sel = self["menu"].getCurrent();
         if not sel: return
         key = sel[1]; log("Menu: " + key); self["info"].setText("Pracuję...")
-        reactor.callLater(0.05, self._delegateMenuOption, key) # Utrzymano krótkie opóźnienie startu akcji
+        reactor.callLater(0.05, self._delegateMenuOption, key)
 
     def _delegateMenuOption(self, key):
         action_map = {"menu_lists": self.runChannelListMenu, "menu_softcam": self.runSoftcamMenu,"picons_github": self.runPiconGitHub, "plugin_update": self.runPluginUpdate,"plugin_info": self.runInfo, "system_diagnostic": self.runDiagnostic}
@@ -263,7 +257,8 @@ class MyUpdaterEnhanced(Screen):
         if not choice: self.updateInfoLabel(); return
         title, url_part = choice; url = url_part.split(":",1)[1]
         log("Selected: {} | {}".format(title, url)); msg(self.session, "Instaluję:\n'{}'...".format(title), timeout=3)
-        install_archive_enhanced(self.session, title, url, finish=lambda: msg(self.session, "Instalacja '{}' zakończona.".format(title), timeout=3))
+        # Używamy reactor.callLater bezpośrednio w lambda
+        install_archive_enhanced(self.session, title, url, finish=lambda: reactor.callLater(0.2, lambda: self.session.open(MessageBox, "Instalacja '{}' zakończona.".format(title), type=MessageBox.TYPE_INFO, timeout=3)))
 
     def runSoftcamMenu(self):
         opts = [("Oscam (auto)", "oscam_auto"), ("Oscam (Levi45)", "oscam_levi45"),("nCam (biko-73)", "ncam_biko"), ("Usuń softcamy", "remove_softcam")]
@@ -272,10 +267,15 @@ class MyUpdaterEnhanced(Screen):
     def runSoftcamSelected(self, choice):
         if not choice: self.updateInfoLabel(); return
         key, title = choice[1], choice[0]
-        msg(self.session, "Akcja: '{}'...".format(title), timeout=2)
-        def final_callback(message): msg(self.session, message, timeout=4); self.updateInfoLabel()
+        msg(self.session, "Akcja: '{}'...".format(title), timeout=2) # Ogólna informacja
+        
+        # Definicja callbacku, który użyje reactor.callLater
+        def final_callback(message):
+            reactor.callLater(0.2, lambda: self.session.open(MessageBox, message, type=MessageBox.TYPE_INFO, timeout=4))
+            self.updateInfoLabel() # Przywróć opis od razu
+
         action_map = {
-            "oscam_auto": lambda: install_oscam_enhanced(self.session, finish=lambda: self.updateInfoLabel()),
+            "oscam_auto": lambda: install_oscam_enhanced(self.session, finish=lambda: self.updateInfoLabel()), # install_oscam_enhanced ma swój callLater
             "oscam_levi45": lambda: console(self.session, title, ["wget -q --no-check-certificate https://raw.githubusercontent.com/levi-45/Levi45Emulator/main/installer.sh -O- | sh"], onClose=lambda: final_callback("Instalacja '{}' zakończona.".format(title)), autoClose=True),
             "ncam_biko": lambda: console(self.session, title, ["wget -q https://raw.githubusercontent.com/biko-73/Ncam_EMU/main/installer.sh -O- | sh"], onClose=lambda: final_callback("Instalacja '{}' zakończona.".format(title)), autoClose=True),
             "remove_softcam": lambda: console(self.session, "Usuwanie softcamów", ["echo '>>> Usuwanie...'", "opkg remove --force-removal-of-dependent-packages enigma2-plugin-softcams-* 2>/dev/null || true", "rm -f /usr/bin/oscam* /usr/bin/ncam* 2>/dev/null || true", "echo '>>> Zakończono.'"], onClose=lambda: final_callback("Softcamy usunięte."), autoClose=True)
@@ -287,7 +287,8 @@ class MyUpdaterEnhanced(Screen):
     def runPiconGitHub(self):
         url = "https://github.com/OliOli2013/PanelAIO-Plugin/raw/main/Picony.zip"; title = "Pobieranie Picon (Transparent)"
         log("Picons: " + url); msg(self.session, "Pobieram picony...", timeout=2)
-        install_archive_enhanced(self.session, title, url, finish=lambda: msg(self.session, "Picony gotowe.", timeout=3))
+        # Używamy reactor.callLater bezpośrednio w lambda
+        install_archive_enhanced(self.session, title, url, finish=lambda: reactor.callLater(0.2, lambda: self.session.open(MessageBox, "Picony gotowe.", type=MessageBox.TYPE_INFO, timeout=3)))
 
     def runPluginUpdate(self):
         self["info"].setText("Sprawdzam wersję online...")
@@ -314,7 +315,8 @@ class MyUpdaterEnhanced(Screen):
 
     def _doUpdate(self, url):
         cmd = "wget -q -O - {} | /bin/sh".format(url)
-        console(self.session, "Aktualizacja MyUpdater", [cmd], onClose=lambda: msg(self.session, "Aktualizacja zakończona.\nRestart GUI może być potrzebny.", timeout=5), autoClose=True)
+        # Używamy reactor.callLater bezpośrednio w lambda
+        console(self.session, "Aktualizacja MyUpdater", [cmd], onClose=lambda: reactor.callLater(0.2, lambda: self.session.open(MessageBox, "Aktualizacja zakończona.\nRestart GUI może być potrzebny.", type=MessageBox.TYPE_INFO, timeout=5)), autoClose=True)
 
     def runInfo(self):
         txt = (u"MyUpdater Enhanced {}\n\n"
