@@ -1,14 +1,18 @@
 # -*- coding: utf-8 -*-
-# Prosta inicjalizacja bez cyklicznych importów
+# MyUpdater Enhanced - Poprawiona inicjalizacja
+# Ten plik jest wymagany przez Enigma2 do prawidłowego działania wtyczki
 
-__version__ = "V4 Enhanced"
-__author__ = "Paweł Pawełek"
+from . import plugin  # <-- POPRAWKA: Zmieniono 'plugin_enhanced' na 'plugin'
 
-# Importujemy dopiero gdy jest to potrzebne
+# Wersja wtyczki
+__version__ = "V5 Enhanced"
+__author__ = "Paweł Pawełek, Sancho, gut"
+__description__ = "MyUpdater Enhanced - kompatybilny z OpenATV/OpenPLI"
+
+# Eksportujemy główną funkcję
 def main(session, **kwargs):
-    from . import plugin
     return plugin.main(session, **kwargs)
 
+# Eksportujemy deskryptor wtyczki
 def Plugins(**kwargs):
-    from . import plugin
     return plugin.Plugins(**kwargs)
