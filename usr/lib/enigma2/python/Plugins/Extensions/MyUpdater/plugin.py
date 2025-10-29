@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-#  MyUpdater Enhanced V5 – Kompletna wersja z naprawioną diagnostyką
+#  MyUpdater Enhanced V5 - Finalna wersja bez błędów składni
 from __future__ import print_function, absolute_import
 from enigma import eDVBDB
 from Screens.Screen import Screen
@@ -19,7 +19,7 @@ from threading import Thread
 
 PLUGIN_PATH = os.path.dirname(os.path.realpath(__file__))
 PLUGIN_TMP_PATH = "/tmp/MyUpdater/"
-VER = "V5.1 Fixed"
+VER = "V5.2 Final"
 LOG_FILE = "/tmp/MyUpdater_install.log"
 
 def log(msg):
@@ -401,9 +401,6 @@ class MyUpdaterEnhanced(Screen):
             "echo 'Wersja Enigma2: $(opkg list-installed | grep enigma2 | head -1 2>/dev/null || echo "Nieznana")'",
             "echo 'Kernel: $(uname -r)'",
             "echo 'Model: $(cat /proc/stb/info/modelname 2>/dev/null || echo "Nieznany")'",
-            "echo ''",
-            "echo '=== Dostępne softcamy ==='",
-            "opkg list | grep -i 'oscam\\|ncam\\|softcam' | head -5 2>/dev/null || echo 'Brak dostępnych softcamów w feed'",
             "echo ''",
             "echo '=== Przestrzeń dyskowa ==='",
             "df -h / | tail -1",
