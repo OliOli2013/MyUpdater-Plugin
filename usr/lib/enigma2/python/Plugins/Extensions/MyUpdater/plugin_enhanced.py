@@ -51,7 +51,7 @@ def get_opkg_command():
     else: return "opkg --force-overwrite"
 
 def msg(session, txt, typ=MessageBox.TYPE_INFO, timeout=3):
-    # Przywrócone minimalne opóźnienie 50 ms dla stabilności na OpenATV 7.6
+    # Krótkie opóźnienie tylko dla okien komunikatów (stabilność OTA 7.6)
     log("Msg: " + txt)
     reactor.callLater(0.05, lambda: session.open(MessageBox, txt, typ, timeout=timeout))
 
@@ -141,7 +141,6 @@ def install_archive_enhanced(session, title, url, finish=None):
         
         def combined_callback():
             reload_settings_python(session)
-            # Delikatne opóźnienie dla stabilności powrotu do GUI
             if finish: reactor.callLater(0.05, finish)
         
         callback = combined_callback
@@ -254,8 +253,8 @@ class MyUpdaterEnhanced(Screen):
         key = sel[1]
         log("Menu: " + key)
         self["info"].setText("Pracuję...")
-        # Przywrócone 0.05 s – stabilne na OpenATV 7.6
-        reactor.callLater(0.05, self._delegateMenuOption, key)
+        # BEZ pośrednich opóźnień – otwieramy ekrany natychmiast
+        self._delegateMenuOption(key)
 
     def _delegateMenuOption(self, key):
         action_map = {
@@ -269,12 +268,8 @@ class MyUpdaterEnhanced(Screen):
         action = action_map.get(key)
         if action:
             action()
-            if key in ["plugin_info"]:
-                 pass
-            elif key not in ["system_diagnostic"]:
-                 pass
         else:
-             self.updateInfoLabel() # Jeśli nieznana akcja, przywróć opis
+            self.updateInfoLabel()
 
     def runChannelListMenu(self):
         self["info"].setText("Pobieram listy...")
@@ -286,11 +281,15 @@ class MyUpdaterEnhanced(Screen):
 
     def _onLists(self, lst):
         self.updateInfoLabel()
-        if not lst: msg(self.session, "Błąd pobierania list. Sprawdź połączenie lub logi.", MessageBox.TYPE_ERROR); return
+        if not lst:
+            msg(self.session, "Błąd pobierania list. Sprawdź połączenie lub logi.", MessageBox.TYPE_ERROR)
+            return
         self.session.openWithCallback(self.runChannelListSelected, ChoiceBox, title="Wybierz listę do instalacji", list=lst, cancelCallback=self.updateInfoLabel)
 
     def runChannelListSelected(self, choice):
-        if not choice: self.updateInfoLabel(); return
+        if not choice:
+            self.updateInfoLabel()
+            return
         title, url_part = choice; url = url_part.split(":",1)[1]
         log("Selected: {} | {}".format(title, url))
         msg(self.session, "Rozpoczynam instalację:\n'{}'...".format(title), timeout=1)
@@ -302,7 +301,9 @@ class MyUpdaterEnhanced(Screen):
         self.session.openWithCallback(self.runSoftcamSelected, ChoiceBox, title="Softcam – wybierz", list=opts, cancelCallback=self.updateInfoLabel)
 
     def runSoftcamSelected(self, choice):
-        if not choice: self.updateInfoLabel(); return
+        if not choice:
+            self.updateInfoLabel()
+            return
         key, title = choice[1], choice[0]
         msg(self.session, "Rozpoczynam akcję: '{}'...".format(title), timeout=1)
         
@@ -318,7 +319,7 @@ class MyUpdaterEnhanced(Screen):
         }
         action = action_map.get(key)
         if action: action()
-        else: self.updateInfoLabel() # Przywróć, jeśli nieznana akcja
+        else: self.updateInfoLabel()
 
     def runPiconGitHub(self):
         url = "https://github.com/OliOli2013/PanelAIO-Plugin/raw/main/Picony.zip"
@@ -347,11 +348,14 @@ class MyUpdaterEnhanced(Screen):
 
     def _onUpdate(self, online, inst_url):
         self.updateInfoLabel()
-        if not online: msg(self.session, "Nie udało się sprawdzić wersji. Sprawdź połączenie lub logi.", MessageBox.TYPE_ERROR); return
+        if not online:
+            msg(self.session, "Nie udało się sprawdzić wersji. Sprawdź połączenie lub logi.", MessageBox.TYPE_ERROR)
+            return
         if online and online != VER and online.strip():
             txt = "Dostępna nowa wersja: {}\nTwoja: {}\nZaktualizować?".format(online, VER)
             self.session.openWithCallback(lambda ans: self._doUpdate(inst_url) if ans else self.updateInfoLabel(), MessageBox, txt, type=MessageBox.TYPE_YESNO, title="Aktualizacja")
-        else: msg(self.session, "Używasz najnowszej wersji ({}).".format(VER), MessageBox.TYPE_INFO)
+        else:
+            msg(self.session, "Używasz najnowszej wersji ({}).".format(VER), MessageBox.TYPE_INFO)
 
     def _doUpdate(self, url):
         cmd = "wget -q -O - {} | /bin/sh".format(url)
