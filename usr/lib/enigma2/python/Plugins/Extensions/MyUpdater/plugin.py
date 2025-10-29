@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-#  MyUpdater Enhanced V5 - Finalna wersja bez błędów składni
+#  MyUpdater V4 Enhanced - Finalna wersja bez błędów
 from __future__ import print_function, absolute_import
 from enigma import eDVBDB
 from Screens.Screen import Screen
@@ -19,7 +19,7 @@ from threading import Thread
 
 PLUGIN_PATH = os.path.dirname(os.path.realpath(__file__))
 PLUGIN_TMP_PATH = "/tmp/MyUpdater/"
-VER = "V5.2 Final"
+VER = "V4 Enhanced"
 LOG_FILE = "/tmp/MyUpdater_install.log"
 
 def log(msg):
@@ -85,7 +85,7 @@ def reload_settings_python(session, *args):
         msg(session, "Wystąpił błąd podczas przeładowywania list.", MessageBox.TYPE_ERROR)
 
 def install_archive_enhanced(session, title, url, finish=None):
-    """Poprawiona wersja instalacji archiwum z naprawionym błędem picon"""
+    """Poprawiona wersja instalacji archiwum - naprawiony błąd picon"""
     log("install_archive_enhanced: " + url)
     
     if url.endswith(".zip"):
@@ -111,16 +111,15 @@ def install_archive_enhanced(session, title, url, finish=None):
         picon_path = "/usr/share/enigma2/picon"
         nested_picon_path = os.path.join(picon_path, "picon")
         
-        # POPRAWKA: Prostsza konstrukcja bez zagnieżdżonych nawiasów w .format()
-        full_command = (
-            backup_cmd + " && " +
-            download_cmd + " && " +
-            "mkdir -p " + picon_path + " && " +
-            "unzip -o -q \"" + tmp_archive_path + "\" -d \"" + picon_path + "\" && " +
-            "if [ -d \"" + nested_picon_path + "\" ]; then mv -f \"" + nested_picon_path + "/*\" \"" + picon_path + "/\"; rmdir \"" + nested_picon_path + "\"; fi && " +
-            "rm -f \"" + tmp_archive_path + "\" && " +
-            "echo '>>> Picony zostały pomyślnie zainstalowane.' && sleep 2"
-        )
+        # POPRAWKA: Prostsza konstrukcja bez zagnieżdżonych nawiasów
+        part1 = backup_cmd + " && " + download_cmd
+        part2 = "mkdir -p " + picon_path
+        part3 = "unzip -o -q \"" + tmp_archive_path + "\" -d \"" + picon_path + "\""
+        part4 = "if [ -d \"" + nested_picon_path + "\" ]; then mv -f \"" + nested_picon_path + "/*\" \"" + picon_path + "/\"; rmdir \"" + nested_picon_path + "\"; fi"
+        part5 = "rm -f \"" + tmp_archive_path + "\""
+        part6 = "echo '>>> Picony zostały pomyślnie zainstalowane.' && sleep 2"
+        
+        full_command = part1 + " && " + part2 + " && " + part3 + " && " + part4 + " && " + part5 + " && " + part6
         
         console(session, title, [full_command], onClose=finish, autoClose=True)
     
@@ -383,10 +382,9 @@ class MyUpdaterEnhanced(Screen):
         console(self.session, "Aktualizacja MyUpdater", [cmd], onClose=lambda: None, autoClose=True)
 
     def runInfo(self):
-        txt = (u"MyUpdater Enhanced {}\n\n"
+        txt = (u"MyUpdater {}\n\n"
                u"Kompatybilność: OpenATV 6.4-7.6, OpenPLI, ViX\n"
-               u"Autorzy: Paweł Pawełek\n"
-               u"Przebudowa: Kompletna wersja enhanced\n\n"
+               u"Przebudowa: Paweł Pawełek\n\n"
                u"System: {}\n"
                u"Komenda opkg: {}").format(VER, self.distro, get_opkg_command())
         self.session.open(MessageBox, txt, MessageBox.TYPE_INFO)
@@ -436,6 +434,6 @@ def main(session, **kwargs):
 
 def Plugins(**kwargs):
     return [PluginDescriptor(name="MyUpdater Enhanced",
-                            description="MyUpdater Enhanced {} - kompatybilny z OpenATV/OpenPLI".format(VER),
+                            description="MyUpdater {} - kompatybilny z OpenATV/OpenPLI".format(VER),
                             where=PluginDescriptor.WHERE_PLUGINMENU,
                             icon="myupdater.png", fnc=main)]
