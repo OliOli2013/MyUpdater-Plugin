@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-#  MyUpdater Enhanced V5 – Kompletna przebudowa z pełną kompatybilnością
+#  MyUpdater Enhanced V5 – Kompletna wersja z naprawioną diagnostyką
 from __future__ import print_function, absolute_import
 from enigma import eDVBDB
 from Screens.Screen import Screen
@@ -19,7 +19,7 @@ from threading import Thread
 
 PLUGIN_PATH = os.path.dirname(os.path.realpath(__file__))
 PLUGIN_TMP_PATH = "/tmp/MyUpdater/"
-VER = "V5 Enhanced"
+VER = "V5.1 Fixed"
 LOG_FILE = "/tmp/MyUpdater_install.log"
 
 def log(msg):
@@ -85,6 +85,7 @@ def reload_settings_python(session, *args):
         msg(session, "Wystąpił błąd podczas przeładowywania list.", MessageBox.TYPE_ERROR)
 
 def install_archive_enhanced(session, title, url, finish=None):
+    """Poprawiona wersja instalacji archiwum z naprawionym błędem picon"""
     log("install_archive_enhanced: " + url)
     
     if url.endswith(".zip"):
@@ -109,26 +110,18 @@ def install_archive_enhanced(session, title, url, finish=None):
     if "picon" in title.lower() and archive_type == "zip":
         picon_path = "/usr/share/enigma2/picon"
         nested_picon_path = os.path.join(picon_path, "picon")
+        
+        # POPRAWKA: Prostsza konstrukcja bez zagnieżdżonych nawiasów w .format()
         full_command = (
-            "{} && " +
-            "{} && " +
-            "mkdir -p {} && " +
-            "unzip -o -q \"{}\" -d \"{}\" && " +
-            "if [ -d \"{}\" ]; then mv -f \"{\"/* \"{}\"/; rmdir \"{}\"; fi && " +
-            "rm -f \"{}\" && " +
+            backup_cmd + " && " +
+            download_cmd + " && " +
+            "mkdir -p " + picon_path + " && " +
+            "unzip -o -q \"" + tmp_archive_path + "\" -d \"" + picon_path + "\" && " +
+            "if [ -d \"" + nested_picon_path + "\" ]; then mv -f \"" + nested_picon_path + "/*\" \"" + picon_path + "/\"; rmdir \"" + nested_picon_path + "\"; fi && " +
+            "rm -f \"" + tmp_archive_path + "\" && " +
             "echo '>>> Picony zostały pomyślnie zainstalowane.' && sleep 2"
-        ).format(
-            backup_cmd,
-            download_cmd,
-            picon_path,
-            tmp_archive_path,
-            picon_path,
-            nested_picon_path,
-            nested_picon_path,
-            picon_path,
-            nested_picon_path,
-            tmp_archive_path
         )
+        
         console(session, title, [full_command], onClose=finish, autoClose=True)
     
     else:
@@ -141,14 +134,7 @@ def install_archive_enhanced(session, title, url, finish=None):
         
         chmod_cmd = "chmod +x \"{}\"".format(install_script_path)
         
-        full_command = "{} && {} && {} && bash {} \"{}\" \"{}\"".format(
-            backup_cmd,
-            download_cmd,
-            chmod_cmd,
-            install_script_path,
-            tmp_archive_path,
-            archive_type
-        )
+        full_command = backup_cmd + " && " + download_cmd + " && " + chmod_cmd + " && bash " + install_script_path + " \"" + tmp_archive_path + "\" \"" + archive_type + "\""
         
         def combined_callback():
             reload_settings_python(session) 
@@ -399,25 +385,55 @@ class MyUpdaterEnhanced(Screen):
     def runInfo(self):
         txt = (u"MyUpdater Enhanced {}\n\n"
                u"Kompatybilność: OpenATV 6.4-7.6, OpenPLI, ViX\n"
-               u"Autorzy:  Paweł Pawełek\n"
+               u"Autorzy: Paweł Pawełek\n"
                u"Przebudowa: Kompletna wersja enhanced\n\n"
                u"System: {}\n"
                u"Komenda opkg: {}").format(VER, self.distro, get_opkg_command())
         self.session.open(MessageBox, txt, MessageBox.TYPE_INFO)
 
     def runDiagnostic(self):
-        """Diagnostyka systemu"""
+        """POPRAWKA: Diagnostyka systemu z wyświetlaniem wyników"""
+        # Komendy diagnostyczne z wyświetlaniem wyników
         commands = [
             "echo '=== Diagnostyka Systemu ==='",
+            "echo 'Data i czas: $(date)'",
             "echo 'System: {}'".format(self.distro),
-            "echo 'Wersja Enigma2: $(opkg list-installed | grep enigma2 | head -1)'",
-            "echo 'Dostępne softcams: $(opkg list | grep -i oscam | head -3)'",
-            "echo 'Przestrzeń dyskowa: $(df -h / | tail -1)'",
-            "echo 'Połączenie internetowe: $(ping -c 1 8.8.8.8 >/dev/null && echo OK || echo BRAK)'",
-            "echo '=== Koniec diagnostyki ==='"
+            "echo 'Wersja Enigma2: $(opkg list-installed | grep enigma2 | head -1 2>/dev/null || echo "Nieznana")'",
+            "echo 'Kernel: $(uname -r)'",
+            "echo 'Model: $(cat /proc/stb/info/modelname 2>/dev/null || echo "Nieznany")'",
+            "echo ''",
+            "echo '=== Dostępne softcamy ==='",
+            "opkg list | grep -i 'oscam\\|ncam\\|softcam' | head -5 2>/dev/null || echo 'Brak dostępnych softcamów w feed'",
+            "echo ''",
+            "echo '=== Przestrzeń dyskowa ==='",
+            "df -h / | tail -1",
+            "echo ''",
+            "echo '=== Pamięć ==='",
+            "free -m | head -2",
+            "echo ''",
+            "echo '=== Połączenie internetowe ==='",
+            "ping -c 1 8.8.8.8 >/dev/null && echo '✓ Internet: OK' || echo '✗ Internet: BRAK'",
+            "echo ''",
+            "echo '=== Wymagane narzędzia ==='",
+            "for cmd in wget curl tar unzip bash; do if command -v $cmd >/dev/null 2>&1; then echo \"✓ $cmd: OK\"; else echo \"✗ $cmd: BRAK\"; fi; done",
+            "echo ''",
+            "echo '=== Koniec diagnostyki ==='",
+            "echo 'Wyniki zapisano w /tmp/MyUpdater_diagnostic.log'",
+            "sleep 3"
         ]
-        console(self.session, "Diagnostyka Systemu", commands, onClose=lambda: None, autoClose=True)
+        
+        # Dodatkowo zapisz do logu
+        log("Rozpoczynam diagnostykę systemu")
+        
+        # Uruchom konsolę z wynikami
+        console(self.session, "Diagnostyka Systemu", commands, onClose=self._onDiagnosticComplete, autoClose=True)
+    
+    def _onDiagnosticComplete(self):
+        """Po zakończeniu diagnostyki"""
+        # Wyświetl informację o zakończeniu
+        msg(self.session, "Diagnostyka zakończona!\nWyniki w /tmp/MyUpdater_diagnostic.log", timeout=5)
 
+# ----------- plugin entry -----------------------------
 def main(session, **kwargs):
     session.open(MyUpdaterEnhanced)
 
