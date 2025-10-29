@@ -28,7 +28,7 @@ def log(msg):
         with io.open(LOG_FILE, "a", encoding='utf-8') as f:
             f.write(u"{} - {}\n".format(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), msg))
     except:
-        pass
+        pass # Ignoruj błędy zapisu logu
 
 def detect_distribution():
     """Detekcja dystrybucji Enigma2"""
@@ -41,7 +41,9 @@ def detect_distribution():
         elif os.path.exists("/etc/openpli-release"): return "openpli"
         elif os.path.exists("/etc/vti-version-info"): return "vix"
         else: return "unknown"
-    except: return "unknown"
+    except Exception as e:
+        log("Error detecting distribution: " + str(e))
+        return "unknown"
 
 def get_opkg_command():
     """Zwraca poprawną komendę opkg dla danej dystrybucji"""
@@ -65,7 +67,10 @@ def console(session, title, cmdlist, onClose, autoClose=True):
             except Exception as call_e: log("Exception in onClose callback after console error: " + str(call_e))
 
 def tmpdir():
-    if not os.path.exists(PLUGIN_TMP_PATH): os.makedirs(PLUGIN_TMP_PATH)
+    if not os.path.exists(PLUGIN_TMP_PATH):
+        try: os.makedirs(PLUGIN_TMP_PATH)
+        except OSError as e: log("Error creating tmpdir: " + str(e))
+
 
 def reload_settings_python(session, *args):
     try:
@@ -76,49 +81,89 @@ def reload_settings_python(session, *args):
         log("[MyUpdater] Błąd podczas przeładowywania list: " + str(e))
         msg(session, "Wystąpił błąd podczas przeładowywania list.", MessageBox.TYPE_ERROR)
 
+#
+# *** FUNKCJA Z OSTATNIĄ POPRAWKĄ (OKOLICE LINII 121) ***
+#
 def install_archive_enhanced(session, title, url, finish=None):
     """Poprawiona wersja instalacji archiwum"""
     log("install_archive_enhanced: " + url)
     archive_type = ""
-    if url.endswith(".zip"): archive_type = "zip"
-    elif url.endswith((".tar.gz", ".tgz")): archive_type = "tar.gz"
-    else: msg(session, "Nieobsługiwany format archiwum!", MessageBox.TYPE_ERROR); return
+    if url.endswith(".zip"):
+        archive_type = "zip"
+    elif url.endswith((".tar.gz", ".tgz")):
+        archive_type = "tar.gz"
+    else:
+        msg(session, "Nieobsługiwany format archiwum!", MessageBox.TYPE_ERROR)
+        if finish:
+            try: finish()
+            except Exception as e: log("Error in finish callback (unsupported format): " + str(e))
+        return
 
     tmpdir()
     tmp_archive_path = os.path.join(PLUGIN_TMP_PATH, os.path.basename(url))
     cmd_chain = []
+
+    # Backup tylko dla list kanałów
     if "picon" not in title.lower():
-        cmd_chain.append("tar -czf /tmp/MyUpdater/backup_$(date +%Y%m%d_%H%M%S).tar.gz -C /etc/enigma2 lamedb *.tv *.radio 2>/dev/null || true")
-    cmd_chain.append('wget --no-check-certificate --timeout=30 -t 2 -O "{}" "{}"'.format(tmp_archive_path, url))
-    callback = finish
-    
+        backup_cmd = "tar -czf /tmp/MyUpdater/backup_$(date +%Y%m%d_%H%M%S).tar.gz -C /etc/enigma2 lamedb *.tv *.radio 2>/dev/null || true"
+        cmd_chain.append(backup_cmd)
+
+    # Pobieranie zawsze
+    download_cmd = 'wget --no-check-certificate --timeout=30 -t 2 -O "{}" "{}"'.format(tmp_archive_path, url)
+    cmd_chain.append(download_cmd)
+
+    callback = finish # Domyślny callback
+
     if "picon" in title.lower() and archive_type == "zip":
-        picon_path = "/usr/share/enigma2/picon"; tmp_extract_path = "/tmp/MyUpdater_picon_extract"
+        picon_path = "/usr/share/enigma2/picon"
+        tmp_extract_path = "/tmp/MyUpdater_picon_extract"
         cmd_chain.extend([
-            "rm -rf " + tmp_extract_path, "mkdir -p " + tmp_extract_path,
+            "rm -rf " + tmp_extract_path,
+            "mkdir -p " + tmp_extract_path,
             "unzip -o -q \"" + tmp_archive_path + "\" -d \"" + tmp_extract_path + "\"",
             "mkdir -p " + picon_path,
-            ("if [ -d \"" + tmp_extract_path + "/picon\" ]; then mv -f \"" + tmp_extract_path + "/picon\"/* \"" + picon_path + "/\" 2>/dev/null || true; "
-             "else mv -f \"" + tmp_extract_path + "\"/* \"" + picon_path + "/\" 2>/dev/null || true; fi"),
-            "rm -rf " + tmp_extract_path, "rm -f \"" + tmp_archive_path + "\"",
+            ("if [ -d \"" + tmp_extract_path + "/picon\" ]; then "
+             "mv -f \"" + tmp_extract_path + "/picon\"/* \"" + picon_path + "/\" 2>/dev/null || true; "
+             "else "
+             "mv -f \"" + tmp_extract_path + "\"/* \"" + picon_path + "/\" 2>/dev/null || true; "
+             "fi"),
+            "rm -rf " + tmp_extract_path,
+            "rm -f \"" + tmp_archive_path + "\"",
             "echo '>>> Picony zainstalowane.' && sleep 0.5"
         ])
-    else: # Listy kanałów
-        install_script_path = os.path.join(PLUGIN_PATH, "install_archive_script.sh")
-        if not os.path.exists(install_script_path):
-             msg(session, "BŁĄD: Brak install_archive_script.sh!", MessageBox.TYPE_ERROR)
-             # *** POPRAWKA Linii ~121: Bezpieczne wywołanie finish ***
-             if finish:
-                 try: finish()
-                 except Exception as e: log("Error in finish callback (missing script): " + str(e))
-             return
-        
-        cmd_chain.extend(["chmod +x \"{}\"".format(install_script_path), "bash {} \"{}\" \"{}\"".format(install_script_path, tmp_archive_path, archive_type)])
-        def combined_callback():
-            reload_settings_python(session)
-            if finish: reactor.callLater(0.3, finish)
-        callback = combined_callback
+        # Callback 'finish' (przekazany z runPiconGitHub) zostaje użyty bez zmian
     
+    else: # Logika dla list kanałów
+        install_script_path = os.path.join(PLUGIN_PATH, "install_archive_script.sh")
+        # --- Sprawdzenie istnienia skryptu ---
+        if not os.path.exists(install_script_path):
+            msg(session, "BŁĄD: Brak pliku install_archive_script.sh!", MessageBox.TYPE_ERROR)
+            log("FATAL: install_archive_script.sh not found at " + install_script_path)
+            # Bezpieczne wywołanie finish, jeśli istnieje
+            if finish:
+                try:
+                    finish()
+                except Exception as e:
+                    # Logowanie błędu w callbacku, linia ~121
+                    log("Error in finish callback (missing script): " + str(e))
+            return # Zakończ funkcję, jeśli brakuje skryptu
+        # --- Koniec sprawdzenia ---
+            
+        # Dodaj polecenia, jeśli skrypt istnieje
+        cmd_chain.extend([
+            "chmod +x \"{}\"".format(install_script_path),
+            "bash {} \"{}\" \"{}\"".format(install_script_path, tmp_archive_path, archive_type)
+        ])
+        
+        # Definicja callbacku dla list kanałów
+        def combined_callback():
+            reload_settings_python(session) # Ta funkcja użyje msg()
+            if finish:
+                reactor.callLater(0.3, finish) # Wywołaj oryginalny finish z opóźnieniem
+        
+        callback = combined_callback # Nadpisz domyślny callback
+
+    # Połącz i wykonaj polecenia
     full_command = " && ".join(filter(None, cmd_chain))
     console(session, title, [full_command], onClose=callback, autoClose=True)
 
@@ -126,7 +171,7 @@ def install_oscam_enhanced(session, finish=None):
     distro = detect_distribution()
     def install_callback():
         msg(session, "Instalacja Oscam zakończona (lub próba). Sprawdź logi.", timeout=4)
-        if finish: try: finish() catch: pass
+        if finish: try: finish(); except Exception as e: log("Error in Oscam finish callback: "+str(e))
     commands = ["echo '>>> Aktualizacja feed...' && opkg update"]
     if distro == "openpli":
         commands.append("echo '>>> Szukanie oscam w feed (OpenPLI)...' && {} install enigma2-plugin-softcams-oscam 2>/dev/null || echo 'Nie znaleziono'".format(get_opkg_command()))
@@ -142,10 +187,10 @@ def get_repo_lists():
         subprocess.check_output(["wget", "--no-check-certificate", "-q", "-T", "10", "-O", tmp, url], stderr=subprocess.STDOUT)
         with io.open(tmp, 'r', encoding='utf-8') as f: data = json.load(f)
         for i in data:
-            if i.get('url'): lst.append(("{} - {} ({})".format(i.get('name',''), i.get('author',''), i.get('version','')), "archive:{}".format(i['url'])))
+            if i.get('url'): lst.append(("{} - {} ({})".format(i.get('name','?'), i.get('author','?'), i.get('version','?')), "archive:{}".format(i['url'])))
     except subprocess.CalledProcessError as e: log("Błąd subprocess (repo lists): " + e.output.decode('utf-8', errors='ignore'))
     except Exception as e: log("Błąd pobierania repo lists: " + str(e))
-    if fileExists(tmp): try: os.remove(tmp); except: pass
+    if fileExists(tmp): try: os.remove(tmp); except Exception as e: log("Error removing tmp manifest: "+str(e))
     return lst
 
 def get_s4a_lists():
@@ -164,7 +209,7 @@ def get_s4a_lists():
             lst.append(("{} - {}".format(name, ver), "archive:{}".format(u)))
     except subprocess.CalledProcessError as e: log("Błąd subprocess (s4a lists): " + e.output.decode('utf-8', errors='ignore'))
     except Exception as e: log("Błąd pobierania s4a lists: " + str(e))
-    if fileExists(tmp): try: os.remove(tmp); except: pass
+    if fileExists(tmp): try: os.remove(tmp); except Exception as e: log("Error removing tmp s4a list: "+str(e))
     return [i for i in lst if not any(x in i[0].lower() for x in ['bzyk', 'jakitaki'])]
 
 class MyUpdaterEnhanced(Screen):
@@ -189,7 +234,7 @@ class MyUpdaterEnhanced(Screen):
         self["actions"] = ActionMap(["WizardActions", "DirectionActions"], {"ok": self.runMenuOption, "back": self.close}, -1)
         self["menu"].onSelectionChanged.append(self.updateInfoLabel)
         tmpdir()
-        if fileExists(LOG_FILE): try: os.remove(LOG_FILE); except: pass
+        if fileExists(LOG_FILE): try: os.remove(LOG_FILE); except Exception as e: log("Error removing old log: "+str(e))
         log(u"MyUpdater Enhanced {} started on {}".format(VER, self.distro))
         self.preloadChannelLists(); self.updateInfoLabel()
 
@@ -237,9 +282,8 @@ class MyUpdaterEnhanced(Screen):
         if not choice: self.updateInfoLabel(); return
         title, url_part = choice; url = url_part.split(":",1)[1]
         log("Selected: {} | {}".format(title, url)); msg(self.session, "Instaluję:\n'{}'...".format(title), timeout=3)
-        # Poprawiony finish lambda
+        # Używamy msg() w callbacku finish
         install_archive_enhanced(self.session, title, url, finish=lambda: msg(self.session, "Instalacja '{}' zakończona.".format(title), timeout=3))
-
 
     def runSoftcamMenu(self):
         opts = [("Oscam (auto)", "oscam_auto"), ("Oscam (Levi45)", "oscam_levi45"),("nCam (biko-73)", "ncam_biko"), ("Usuń softcamy", "remove_softcam")]
@@ -251,7 +295,7 @@ class MyUpdaterEnhanced(Screen):
         msg(self.session, "Akcja: '{}'...".format(title), timeout=2)
         def final_callback(message): msg(self.session, message, timeout=4); self.updateInfoLabel()
         action_map = {
-            "oscam_auto": lambda: install_oscam_enhanced(self.session, finish=lambda: self.updateInfoLabel()),
+            "oscam_auto": lambda: install_oscam_enhanced(self.session, finish=lambda: self.updateInfoLabel()), # install_oscam_enhanced ma swój callback msg
             "oscam_levi45": lambda: console(self.session, title, ["wget -q --no-check-certificate https://raw.githubusercontent.com/levi-45/Levi45Emulator/main/installer.sh -O- | sh"], onClose=lambda: final_callback("Instalacja '{}' zakończona.".format(title)), autoClose=True),
             "ncam_biko": lambda: console(self.session, title, ["wget -q https://raw.githubusercontent.com/biko-73/Ncam_EMU/main/installer.sh -O- | sh"], onClose=lambda: final_callback("Instalacja '{}' zakończona.".format(title)), autoClose=True),
             "remove_softcam": lambda: console(self.session, "Usuwanie softcamów", ["echo '>>> Usuwanie...'", "opkg remove --force-removal-of-dependent-packages enigma2-plugin-softcams-* 2>/dev/null || true", "rm -f /usr/bin/oscam* /usr/bin/ncam* 2>/dev/null || true", "echo '>>> Zakończono.'"], onClose=lambda: final_callback("Softcamy usunięte."), autoClose=True)
@@ -263,9 +307,8 @@ class MyUpdaterEnhanced(Screen):
     def runPiconGitHub(self):
         url = "https://github.com/OliOli2013/PanelAIO-Plugin/raw/main/Picony.zip"; title = "Pobieranie Picon (Transparent)"
         log("Picons: " + url); msg(self.session, "Pobieram picony...", timeout=2)
-        # Poprawiony finish lambda
+        # Używamy msg() w callbacku finish
         install_archive_enhanced(self.session, title, url, finish=lambda: msg(self.session, "Picony gotowe.", timeout=3))
-
 
     def runPluginUpdate(self):
         self["info"].setText("Sprawdzam wersję online...")
@@ -279,7 +322,7 @@ class MyUpdaterEnhanced(Screen):
             with io.open(tmp_ver, 'r', encoding='utf-8') as f: online = f.read().strip()
         except subprocess.CalledProcessError as e: log("Błąd subprocess (update check): " + e.output.decode('utf-8', errors='ignore'))
         except Exception as e: log("Błąd sprawdzania wersji: " + str(e))
-        if fileExists(tmp_ver): try: os.remove(tmp_ver); except: pass
+        if fileExists(tmp_ver): try: os.remove(tmp_ver); except Exception as e: log("Error removing tmp version file: "+str(e))
         reactor.callFromThread(self._onUpdate, online, inst_url)
 
     def _onUpdate(self, online, inst_url):
