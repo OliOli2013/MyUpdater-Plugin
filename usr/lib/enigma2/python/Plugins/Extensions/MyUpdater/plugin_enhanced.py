@@ -86,7 +86,7 @@ def reload_settings_python(session, *args):
         msg(session, "Wystąpił błąd podczas przeładowywania list.", MessageBox.TYPE_ERROR)
 
 #
-# *** FUNKCJA POPRAWIONA (INSTALACJA PICON - NOWA LOGIKA) ***
+# *** FUNKCJA POPRAWIONA (OSTATECZNA LOGIKA INSTALACJI) ***
 #
 def install_archive_enhanced(session, title, url, finish=None):
     """Poprawiona wersja instalacji archiwum"""
@@ -104,48 +104,48 @@ def install_archive_enhanced(session, title, url, finish=None):
     tmpdir()
     tmp_archive_path = os.path.join(PLUGIN_TMP_PATH, os.path.basename(url))
     
-    # Backup starych list kanałów
-    backup_cmd = ""
+    # === NOWA, BEZPIECZNA LOGIKA BUDOWANIA POLECEŃ ===
+    cmd_chain = []
+    
+    # 1. Dodaj backup TYLKO jeśli to NIE są picony
     if "picon" not in title.lower():
         backup_cmd = "tar -czf /tmp/MyUpdater/backup_$(date +%Y%m%d_%H%M%S).tar.gz -C /etc/enigma2 lamedb *.tv *.radio 2>/dev/null || true"
-    
+        cmd_chain.append(backup_cmd)
+
+    # 2. Zawsze dodaj pobieranie
     download_cmd = 'wget --no-check-certificate --timeout=30 -t 2 -O "{}" "{}"'.format(tmp_archive_path, url)
+    cmd_chain.append(download_cmd)
     
+    # Ustaw domyślny callback (zostanie nadpisany dla list kanałów)
+    callback = finish
+    
+    # 3. Dodaj logikę specyficzną dla typu
     if "picon" in title.lower() and archive_type == "zip":
         picon_path = "/usr/share/enigma2/picon"
-        # *** NOWA, BEZPIECZNA LOGIKA INSTALACJI PICON ***
-        tmp_extract_path = "/tmp/MyUpdater_picon_extract" # Dedykowany katalog rozpakowania
+        tmp_extract_path = "/tmp/MyUpdater_picon_extract"
         
-        # 1. Pobierz, 2. Wyczyść stare tmp, 3. Utwórz nowe tmp, 4. Rozpakuj do tmp
-        part1 = backup_cmd + " && " + download_cmd
-        part2 = "rm -rf " + tmp_extract_path
-        part3 = "mkdir -p " + tmp_extract_path
-        part4 = "unzip -o -q \"" + tmp_archive_path + "\" -d \"" + tmp_extract_path + "\""
+        cmd_chain.append("rm -rf " + tmp_extract_path)
+        cmd_chain.append("mkdir -p " + tmp_extract_path)
+        cmd_chain.append("unzip -o -q \"" + tmp_archive_path + "\" -d \"" + tmp_extract_path + "\"")
+        cmd_chain.append("mkdir -p " + picon_path)
         
-        # 5. Upewnij się, że docelowy folder /usr/share/enigma2/picon istnieje
-        part5 = "mkdir -p " + picon_path
-
-        # 6. Sprawdź, czy ZIP miał folder 'picon' w środku i przenieś
-        part6 = (
+        # Logika przenoszenia (sprawdza czy jest podfolder 'picon')
+        mv_logic = (
             "if [ -d \"" + tmp_extract_path + "/picon\" ]; then "
-            "mv -f \"" + tmp_extract_path + "/picon\"/* \"" + picon_path + "/\" 2>/dev/null || true; " # Przenieś zawartość podfolderu
+            "mv -f \"" + tmp_extract_path + "/picon\"/* \"" + picon_path + "/\" 2>/dev/null || true; "
             "else "
-            "mv -f \"" + tmp_extract_path + "\"/* \"" + picon_path + "/\" 2>/dev/null || true; " # Przenieś zawartość główną
+            "mv -f \"" + tmp_extract_path + "\"/* \"" + picon_path + "/\" 2>/dev/null || true; "
             "fi"
         )
-
-        # 7. Posprzątaj (katalog tymczasowy i pobrany .zip)
-        part7 = "rm -rf " + tmp_extract_path
-        part8 = "rm -f \"" + tmp_archive_path + "\""
-        part9 = "echo '>>> Picony zostały pomyślnie zainstalowane.' && sleep 2"
-
-        full_command = part1 + " && " + part2 + " && " + part3 + " && " + part4 + " && " + part5 + " && " + part6 + " && " + part7 + " && " + part8 + " && " + part9
+        cmd_chain.append(mv_logic)
         
-        # autoClose=True jest poprawne, okno zamknie się samo po sukcesie
-        console(session, title, [full_command], onClose=finish, autoClose=True)
+        # Sprzątanie
+        cmd_chain.append("rm -rf " + tmp_extract_path)
+        cmd_chain.append("rm -f \"" + tmp_archive_path + "\"")
+        cmd_chain.append("echo '>>> Picony zostały pomyślnie zainstalowane.' && sleep 2")
     
     else:
-        # Ta część (dla list kanałów) pozostaje bez zmian
+        # Logika dla list kanałów (inna niż picony)
         install_script_path = os.path.join(PLUGIN_PATH, "install_archive_script.sh")
         
         if not os.path.exists(install_script_path):
@@ -153,23 +153,23 @@ def install_archive_enhanced(session, title, url, finish=None):
              if finish: finish()
              return
         
-        chmod_cmd = "chmod +x \"{}\"".format(install_script_path)
+        cmd_chain.append("chmod +x \"{}\"".format(install_script_path))
+        cmd_chain.append("bash {} \"{}\" \"{}\"".format(install_script_path, tmp_archive_path, archive_type))
         
-        full_command = "{} && {} && {} && bash {} \"{}\" \"{}\"".format(
-            backup_cmd,
-            download_cmd,
-            chmod_cmd,
-            install_script_path,
-            tmp_archive_path,
-            archive_type
-        )
-        
+        # Dla list kanałów potrzebujemy przeładować ustawienia
         def combined_callback():
             reload_settings_python(session) 
             if finish:
-                finish() 
+                finish()
         
-        console(session, title, [full_command], onClose=combined_callback, autoClose=True)
+        callback = combined_callback # Nadpisz callback
+    
+    # 4. Złącz wszystkie polecenia w jeden łańcuch
+    full_command = " && ".join(cmd_chain)
+    
+    # 5. Uruchom konsolę
+    console(session, title, [full_command], onClose=callback, autoClose=True)
+
 
 def install_oscam_enhanced(session, finish=None):
     """Inteligentna instalacja oscam z wieloma fallback"""
@@ -390,7 +390,6 @@ class MyUpdaterEnhanced(Screen):
             msg(self.session, "Nie udało się sprawdzić wersji. Sprawdź połączenie.", MessageBox.TYPE_ERROR)
             return
         
-        # Poprawka: Sprawdzanie wersji V5
         if online and not online.startswith(VER):
             txt = "Dostępna nowa wersja: {}\nTwoja: {}\nZaktualizować?".format(online, VER)
             self.session.openWithCallback(lambda ans: self._doUpdate(inst_url) if ans else None,
