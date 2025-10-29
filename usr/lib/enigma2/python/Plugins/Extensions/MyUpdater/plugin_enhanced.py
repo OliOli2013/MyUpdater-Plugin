@@ -51,9 +51,9 @@ def get_opkg_command():
     else: return "opkg --force-overwrite"
 
 def msg(session, txt, typ=MessageBox.TYPE_INFO, timeout=3):
-    # Skrócono domyślny timeout i usunięto zbędne opóźnienie wywołania
+    # Przywrócone minimalne opóźnienie 50 ms dla stabilności na OpenATV 7.6
     log("Msg: " + txt)
-    reactor.callLater(0, lambda: session.open(MessageBox, txt, typ, timeout=timeout))
+    reactor.callLater(0.05, lambda: session.open(MessageBox, txt, typ, timeout=timeout))
 
 def console(session, title, cmdlist, onClose, autoClose=True):
     log("Console: {} | {}".format(title, " ; ".join(cmdlist)))
@@ -141,7 +141,8 @@ def install_archive_enhanced(session, title, url, finish=None):
         
         def combined_callback():
             reload_settings_python(session)
-            if finish: reactor.callLater(0, finish)
+            # Delikatne opóźnienie dla stabilności powrotu do GUI
+            if finish: reactor.callLater(0.05, finish)
         
         callback = combined_callback
     
@@ -158,7 +159,6 @@ def install_oscam_enhanced(session, finish=None):
             try: finish()
             except: pass
 
-    # Szybszy update feed (jeśli sieć wolna, nie blokuje długo)
     commands = ["echo '>>> Aktualizacja feed...' && opkg update"]
     if distro == "openpli":
         commands.append("echo '>>> Szukanie oscam w feed (OpenPLI)...' && {} install enigma2-plugin-softcams-oscam 2>/dev/null || echo 'Nie znaleziono w feed'".format(get_opkg_command()))
@@ -173,7 +173,6 @@ def get_repo_lists():
     tmp = os.path.join(PLUGIN_TMP_PATH, "manifest.json")
     lst = []
     try:
-        # Szybszy timeout pobierania listy
         subprocess.check_output(["wget", "--no-check-certificate", "-q", "-T", "6", "-O", tmp, url], stderr=subprocess.STDOUT)
         with io.open(tmp, 'r', encoding='utf-8') as f: data = json.load(f)
         for i in data:
@@ -187,7 +186,6 @@ def get_s4a_lists():
     tmp = os.path.join(PLUGIN_TMP_PATH, "s4aupdater_list.txt")
     lst = []
     try:
-        # Szybszy timeout pobierania listy
         subprocess.check_output(["wget", "--no-check-certificate", "-q", "-T", "6", "-O", tmp, url], stderr=subprocess.STDOUT)
         urls, vers = {}, {}
         with io.open(tmp, 'r', encoding='utf-8', errors='ignore') as f:
@@ -256,8 +254,8 @@ class MyUpdaterEnhanced(Screen):
         key = sel[1]
         log("Menu: " + key)
         self["info"].setText("Pracuję...")
-        # Natychmiastowe delegowanie bez opóźnienia
-        reactor.callLater(0, self._delegateMenuOption, key)
+        # Przywrócone 0.05 s – stabilne na OpenATV 7.6
+        reactor.callLater(0.05, self._delegateMenuOption, key)
 
     def _delegateMenuOption(self, key):
         action_map = {
