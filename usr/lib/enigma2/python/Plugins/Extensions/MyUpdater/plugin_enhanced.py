@@ -85,6 +85,9 @@ def reload_settings_python(session, *args):
         log("[MyUpdater] Błąd podczas przeładowywania list: " + str(e))
         msg(session, "Wystąpił błąd podczas przeładowywania list.", MessageBox.TYPE_ERROR)
 
+#
+# *** FUNKCJA POPRAWIONA (INSTALACJA PICON - NOWA LOGIKA) ***
+#
 def install_archive_enhanced(session, title, url, finish=None):
     """Poprawiona wersja instalacji archiwum"""
     log("install_archive_enhanced: " + url)
@@ -110,32 +113,39 @@ def install_archive_enhanced(session, title, url, finish=None):
     
     if "picon" in title.lower() and archive_type == "zip":
         picon_path = "/usr/share/enigma2/picon"
-        nested_picon_path = os.path.join(picon_path, "picon")
+        # *** NOWA, BEZPIECZNA LOGIKA INSTALACJI PICON ***
+        tmp_extract_path = "/tmp/MyUpdater_picon_extract" # Dedykowany katalog rozpakowania
         
-        # Poprawka literówki w poleceniu mv
-        full_command = (
-            "{} && " +
-            "{} && " +
-            "mkdir -p {} && " +
-            "unzip -o -q \"{}\" -d \"{}\" && " +
-            "if [ -d \"{}\" ]; then mv -f \"{}\"/* \"{}\"/; rmdir \"{}\"; fi && " +
-            "rm -f \"{}\" && " +
-            "echo '>>> Picony zostały pomyślnie zainstalowane.' && sleep 2"
-        ).format(
-            backup_cmd,
-            download_cmd,
-            picon_path,
-            tmp_archive_path,
-            picon_path,
-            nested_picon_path,
-            nested_picon_path,
-            picon_path,
-            nested_picon_path,
-            tmp_archive_path
+        # 1. Pobierz, 2. Wyczyść stare tmp, 3. Utwórz nowe tmp, 4. Rozpakuj do tmp
+        part1 = backup_cmd + " && " + download_cmd
+        part2 = "rm -rf " + tmp_extract_path
+        part3 = "mkdir -p " + tmp_extract_path
+        part4 = "unzip -o -q \"" + tmp_archive_path + "\" -d \"" + tmp_extract_path + "\""
+        
+        # 5. Upewnij się, że docelowy folder /usr/share/enigma2/picon istnieje
+        part5 = "mkdir -p " + picon_path
+
+        # 6. Sprawdź, czy ZIP miał folder 'picon' w środku i przenieś
+        part6 = (
+            "if [ -d \"" + tmp_extract_path + "/picon\" ]; then "
+            "mv -f \"" + tmp_extract_path + "/picon\"/* \"" + picon_path + "/\" 2>/dev/null || true; " # Przenieś zawartość podfolderu
+            "else "
+            "mv -f \"" + tmp_extract_path + "\"/* \"" + picon_path + "/\" 2>/dev/null || true; " # Przenieś zawartość główną
+            "fi"
         )
+
+        # 7. Posprzątaj (katalog tymczasowy i pobrany .zip)
+        part7 = "rm -rf " + tmp_extract_path
+        part8 = "rm -f \"" + tmp_archive_path + "\""
+        part9 = "echo '>>> Picony zostały pomyślnie zainstalowane.' && sleep 2"
+
+        full_command = part1 + " && " + part2 + " && " + part3 + " && " + part4 + " && " + part5 + " && " + part6 + " && " + part7 + " && " + part8 + " && " + part9
+        
+        # autoClose=True jest poprawne, okno zamknie się samo po sukcesie
         console(session, title, [full_command], onClose=finish, autoClose=True)
     
     else:
+        # Ta część (dla list kanałów) pozostaje bez zmian
         install_script_path = os.path.join(PLUGIN_PATH, "install_archive_script.sh")
         
         if not os.path.exists(install_script_path):
