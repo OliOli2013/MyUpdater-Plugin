@@ -14,7 +14,7 @@ from Plugins.Plugin import PluginDescriptor
 from Tools.Directories import fileExists
 
 import io
-import os, subprocess, json, datetime, traceback, re, weakref
+import os, subprocess, json, datetime, traceback, re
 from twisted.internet import reactor
 from threading import Thread
 
@@ -58,22 +58,19 @@ def get_opkg_command():
     else:
         return "opkg --force-overwrite"
 
-#
-# *** POPRAWIONA FUNKCJA msg() Z KRÓTSZYM OPÓŹNIENIEM ***
-#
 def msg(session, txt, typ=MessageBox.TYPE_INFO, timeout=6):
     # Używa reactor.callLater dla bezpiecznego wyświetlania
     log("Msg: " + txt)
-    # Skrócono opóźnienie z 0.2 na 0.1 sekundy
-    reactor.callLater(0.1, lambda: session.open(MessageBox, txt, typ, timeout=timeout))
+    reactor.callLater(0.2, lambda: session.open(MessageBox, txt, typ, timeout=timeout))
 
 def console(session, title, cmdlist, onClose, autoClose=True):
     log("Console: {} | {}".format(title, " ; ".join(cmdlist)))
     try:
         c = session.open(Console, title=title, cmdlist=cmdlist, closeOnSuccess=autoClose)
-        # Przekazanie samej funkcji onClose (bez weakref dla prostoty, ale działało)
+        # Używamy weakref, aby uniknąć potencjalnych problemów z pamięcią
+        import weakref
         if onClose:
-             c.onClose.append(onClose)
+             c.onClose.append(weakref.ref(onClose))
     except Exception as e:
         log("Console exception: " + str(e))
         if onClose:
@@ -87,7 +84,7 @@ def tmpdir():
         os.makedirs(PLUGIN_TMP_PATH)
 
 def reload_settings_python(session, *args):
-    # Używamy msg() dla bezpieczeństwa
+    # Przywrócono użycie msg() dla bezpieczeństwa
     try:
         db = eDVBDB.getInstance()
         db.reloadServicelist()
@@ -122,7 +119,7 @@ def install_archive_enhanced(session, title, url, finish=None):
     download_cmd = 'wget --no-check-certificate --timeout=30 -t 2 -O "{}" "{}"'.format(tmp_archive_path, url)
     cmd_chain.append(download_cmd)
     
-    callback = finish
+    callback = finish # Domyślnie użyj przekazanego callbacku
     
     if "picon" in title.lower() and archive_type == "zip":
         picon_path = "/usr/share/enigma2/picon"
@@ -133,11 +130,13 @@ def install_archive_enhanced(session, title, url, finish=None):
             "mkdir -p " + tmp_extract_path,
             "unzip -o -q \"" + tmp_archive_path + "\" -d \"" + tmp_extract_path + "\"",
             "mkdir -p " + picon_path,
+            # Logika przenoszenia
             ("if [ -d \"" + tmp_extract_path + "/picon\" ]; then "
              "mv -f \"" + tmp_extract_path + "/picon\"/* \"" + picon_path + "/\" 2>/dev/null || true; "
              "else "
              "mv -f \"" + tmp_extract_path + "\"/* \"" + picon_path + "/\" 2>/dev/null || true; "
              "fi"),
+            # Sprzątanie
             "rm -rf " + tmp_extract_path,
             "rm -f \"" + tmp_archive_path + "\"",
             "echo '>>> Picony zostały pomyślnie zainstalowane.' && sleep 1"
@@ -150,23 +149,24 @@ def install_archive_enhanced(session, title, url, finish=None):
         if not os.path.exists(install_script_path):
              msg(session, "BŁĄD: Brak pliku install_archive_script.sh!", MessageBox.TYPE_ERROR)
              if finish:
-                 try: finish()
+                 try: finish() # Wywołaj oryginalny callback, jeśli jest
                  except: pass
-             return
+             return # Zakończ, jeśli brakuje skryptu
         
         cmd_chain.extend([
             "chmod +x \"{}\"".format(install_script_path),
             "bash {} \"{}\" \"{}\"".format(install_script_path, tmp_archive_path, archive_type)
         ])
         
+        # Nowy callback, który najpierw przeładowuje listy, potem wywołuje oryginalny finish
         def combined_callback():
             reload_settings_python(session) # Ta funkcja użyje msg()
-            # Wywołaj oryginalny callback (np. komunikat o zakończeniu instalacji)
-            # używając msg() dla bezpieczeństwa
             if finish:
-                 reactor.callLater(0.3, finish) # Lekkie opóźnienie
+                # Wywołaj oryginalny callback (np. komunikat o zakończeniu instalacji)
+                # Używamy msg() dla bezpieczeństwa, jeśli oryginalny callback też by coś otwierał
+                reactor.callLater(0.3, finish) # Lekkie opóźnienie dla pewności
         
-        callback = combined_callback
+        callback = combined_callback # Nadpisz callback
     
     full_command = " && ".join(filter(None, cmd_chain))
     
@@ -178,6 +178,7 @@ def install_oscam_enhanced(session, finish=None):
     distro = detect_distribution()
     
     def install_callback():
+        # Użyj msg() dla bezpiecznego wyświetlenia komunikatu po zakończeniu
         msg(session, "Instalacja Oscam zakończona (lub próba zakończona). Sprawdź logi.", timeout=4)
         if finish:
             try: finish()
@@ -302,10 +303,13 @@ class MyUpdaterEnhanced(Screen):
         key = sel[1]
         log("Menu: " + key)
         
+        # Zmień tekst info na "Pracuję..." przed uruchomieniem akcji
         self["info"].setText("Pracuję...")
+        # Użyj reactor.callLater, aby dać UI czas na odświeżenie etykiety przed blokującą operacją
         reactor.callLater(0.1, self._delegateMenuOption, key)
 
     def _delegateMenuOption(self, key):
+        # Ta funkcja jest wywoływana z lekkim opóźnieniem
         if key == "menu_lists":
             self.runChannelListMenu()
         elif key == "menu_softcam":
@@ -316,10 +320,13 @@ class MyUpdaterEnhanced(Screen):
             self.runPluginUpdate()
         elif key == "plugin_info":
             self.runInfo()
+            self.updateInfoLabel() # Przywróć opis po pokazaniu info
         elif key == "system_diagnostic":
             self.runDiagnostic()
+            # Dla diagnostyki nie przywracamy opisu, bo okno zostaje otwarte
 
     def runChannelListMenu(self):
+        # Już ustawiono "Pracuję...", zmieniamy na "Pobieram listy..."
         self["info"].setText("Pobieram listy...")
         Thread(target=self._bgLists).start()
 
@@ -330,27 +337,24 @@ class MyUpdaterEnhanced(Screen):
         reactor.callFromThread(self._onLists, all_lists)
 
     def _onLists(self, lst):
-        self.updateInfoLabel()
+        self.updateInfoLabel() # Przywróć opis opcji
         if not lst:
             msg(self.session, "Błąd pobierania list. Sprawdź połączenie lub logi.", MessageBox.TYPE_ERROR)
             return
-        # Przywróć opis jeśli anulowano wybór
         self.session.openWithCallback(self.runChannelListSelected,
-                                      ChoiceBox, title="Wybierz listę do instalacji", list=lst, cancelCallback=self.updateInfoLabel)
+                                      ChoiceBox, title="Wybierz listę do instalacji", list=lst)
 
     def runChannelListSelected(self, choice):
         if not choice:
-            self.updateInfoLabel()
+            self.updateInfoLabel() # Przywróć opis, jeśli anulowano
             return
         title = choice[0]
         url = choice[1].split(":",1)[1]
         log("Selected: {} | {}".format(title, url))
         msg(self.session, "Rozpoczynam instalację:\n'{}'...".format(title), timeout=5)
         # Używamy msg() w callbacku dla bezpieczeństwa
-        # Combined_callback w install_archive_enhanced zajmie się komunikatem "Listy przeładowane"
         install_archive_enhanced(self.session, title, url,
                                 finish=lambda: msg(self.session, "Instalacja '{}' zakończona.".format(title), timeout=3))
-
 
     def runSoftcamMenu(self):
         opts = [
@@ -359,24 +363,26 @@ class MyUpdaterEnhanced(Screen):
             ("nCam (biko-73)", "ncam_biko"),
             ("Usuń wszystkie softcamy", "remove_softcam")
         ]
+        # Przywróć opis, jeśli użytkownik anuluje wybór
         self.session.openWithCallback(self.runSoftcamSelected,
                                       ChoiceBox, title="Softcam – wybierz", list=opts, cancelCallback=self.updateInfoLabel)
 
     def runSoftcamSelected(self, choice):
         if not choice:
-             self.updateInfoLabel()
+             self.updateInfoLabel() # Przywróć opis, jeśli anulowano
              return
         key, title = choice[1], choice[0]
         
+        # Używamy msg() dla informacji o rozpoczęciu
         msg(self.session, "Rozpoczynam akcję dla: '{}'...".format(title), timeout=2)
         
+        # Definicja callbacku, który przywróci opis opcji
         def final_callback(message):
             msg(self.session, message, timeout=4)
-            self.updateInfoLabel()
+            self.updateInfoLabel() # Przywróć opis po komunikacie
 
         if key == "oscam_auto":
-            # install_oscam_enhanced używa msg() w swoim callbacku
-            install_oscam_enhanced(self.session, finish=lambda: self.updateInfoLabel()) # Tylko przywróć opis
+            install_oscam_enhanced(self.session, finish=lambda: final_callback("Instalacja Oscam zakończona (lub próba)."))
         
         elif key == "oscam_levi45":
             cmd = "wget -q --no-check-certificate https://raw.githubusercontent.com/levi-45/Levi45Emulator/main/installer.sh -O- | sh"
@@ -405,6 +411,7 @@ class MyUpdaterEnhanced(Screen):
                                 finish=lambda: msg(self.session, "Picony gotowe.", timeout=3))
 
     def runPluginUpdate(self):
+        # Już ustawiono "Pracuję...", zmieniamy na "Sprawdzam..."
         self["info"].setText("Sprawdzam wersję online...")
         Thread(target=self._bgUpdate).start()
 
@@ -427,13 +434,14 @@ class MyUpdaterEnhanced(Screen):
         reactor.callFromThread(self._onUpdate, online, inst_url)
 
     def _onUpdate(self, online, inst_url):
-        self.updateInfoLabel()
+        self.updateInfoLabel() # Przywróć opis opcji
         if not online:
             msg(self.session, "Nie udało się sprawdzić wersji. Sprawdź połączenie lub logi.", MessageBox.TYPE_ERROR)
             return
         
         if online and online != VER and online.strip():
             txt = "Dostępna nowa wersja: {}\nTwoja: {}\nZaktualizować?".format(online, VER)
+            # Przywróć opis jeśli użytkownik kliknie "Nie"
             self.session.openWithCallback(lambda ans: self._doUpdate(inst_url) if ans else self.updateInfoLabel(),
                                           MessageBox, txt, type=MessageBox.TYPE_YESNO, title="Aktualizacja")
         else:
