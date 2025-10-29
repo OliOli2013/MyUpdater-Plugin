@@ -1,0 +1,35 @@
+{
+    "outline": {
+        "slideNumber": 1,
+        "title": "MyUpdater Enhanced - Nowa Wersja Aplikacji Enigma 2",
+        "subTitle": "Rozwiązanie problemów z OpenPLI i instalacją oscam"
+    },
+    "tableOfContent": {
+        "slideNumber": 2
+    },
+    "chapters": {
+        "slideNumber": 3,
+        "chapterTitle": "Analiza i Rozwiązania",
+        "slides": [
+            {
+                "slideNumber": 4,
+                "slideTitle": "Zidentyfikowane Problemy",
+                "slideContent": "1. Niekompatybilność z OpenPLI - różnice w systemach opkg i zarządzaniu pakietami\n2. Błędy w instalacji oscam z feed - zbyt skomplikowana logika bez kontroli błędów\n3. Brak obsługi błędów sieciowych i brak fallback dla różnych źródeł\n4. Problemy z uprawnieniami i ścieżkami w różnych dystrybucjach"
+            },
+            {
+                "slideNumber": 5,
+                "slideTitle": "Rozwiązania Techniczne",
+                "slideContent": "1. Detekcja dystrybucji i dostosowanie poleceń do OpenATV/OpenPLI\n2. Uproszczona instalacja oscam z fallback na alternatywne źródła\n3. Kompletna obsługa błędów z komunikatami dla użytkownika\n4. Uniwersalne ścieżki i uprawnienia działające na wszystkich systemach"
+            },
+            {
+                "slideNumber": 6,
+                "slideTitle": "Nowe Funkcje",
+                "slideContent": "1. Automatyczna detekcja systemu (OpenATV/OpenPLI/ViX)\n2. Inteligentna instalacja oscam z wieloma źródłami fallback\n3. Przyjazne komunikaty o błędach z sugestiami rozwiązań\n4. Kopia zapasowa przed instalacją list kanałów\n5. Weryfikacja integralności pobranych plików"
+            }
+        ]
+    },
+    "final": {
+        "slideNumber": 7,
+        "finalContent": "Gotowa, funkcjonalna aplikacja z pełną kompatybilnością"
+    }
+}
