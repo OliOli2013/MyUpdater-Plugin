@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 #  MyUpdater Enhanced V5 – Kompletna przebudowa z pełną kompatybilnością
 #  Plik na GitHub jako: plugin_enhanced.py
-#  Wersja z pre-fetchingiem list kanałów przy starcie
 from __future__ import print_function, absolute_import
 from enigma import eDVBDB
 from Screens.Screen import Screen
@@ -21,7 +20,7 @@ from threading import Thread
 
 PLUGIN_PATH = os.path.dirname(os.path.realpath(__file__))
 PLUGIN_TMP_PATH = "/tmp/MyUpdater/"
-VER = "V5 Enhanced"
+VER = "V5 Enhanced" # Wersja wewnętrzna nadal może być szczegółowa
 LOG_FILE = "/tmp/MyUpdater_install.log"
 
 def log(msg):
@@ -32,24 +31,28 @@ def log(msg):
         pass
 
 def detect_distribution():
+    """Detekcja dystrybucji Enigma2"""
     try:
         if os.path.exists("/etc/openatv-release"):
-            with open("/etc/openatv-release", 'r') as f: content = f.read().lower()
-            if "7." in content: return "openatv7"
-            elif "6." in content: return "openatv6"
-            return "openatv"
+            with open("/etc/openatv-release", 'r') as f:
+                content = f.read().lower()
+                if "7." in content: return "openatv7"
+                elif "6." in content: return "openatv6"
+                return "openatv"
         elif os.path.exists("/etc/openpli-release"): return "openpli"
         elif os.path.exists("/etc/vti-version-info"): return "vix"
         else: return "unknown"
     except: return "unknown"
 
 def get_opkg_command():
+    """Zwraca poprawną komendę opkg dla danej dystrybucji"""
     distro = detect_distribution()
     if distro == "openpli": return "opkg --force-overwrite --force-downgrade"
     else: return "opkg --force-overwrite"
 
 def msg(session, txt, typ=MessageBox.TYPE_INFO, timeout=6):
     log("Msg: " + txt)
+    # Zmniejszono opóźnienie do 0.05s
     reactor.callLater(0.05, lambda: session.open(MessageBox, txt, typ, timeout=timeout))
 
 def console(session, title, cmdlist, onClose, autoClose=True):
@@ -69,81 +72,112 @@ def tmpdir():
 def reload_settings_python(session, *args):
     try:
         db = eDVBDB.getInstance()
-        db.reloadServicelist(); db.reloadBouquets()
+        db.reloadServicelist()
+        db.reloadBouquets()
         msg(session, "Listy kanałów przeładowane.", timeout=3)
     except Exception as e:
         log("[MyUpdater] Błąd podczas przeładowywania list: " + str(e))
         msg(session, "Wystąpił błąd podczas przeładowywania list.", MessageBox.TYPE_ERROR)
 
 def install_archive_enhanced(session, title, url, finish=None):
+    """Poprawiona wersja instalacji archiwum"""
     log("install_archive_enhanced: " + url)
+    
     archive_type = ""
     if url.endswith(".zip"): archive_type = "zip"
     elif url.endswith((".tar.gz", ".tgz")): archive_type = "tar.gz"
-    else: msg(session, "Nieobsługiwany format archiwum!", MessageBox.TYPE_ERROR); return
+    else:
+        msg(session, "Nieobsługiwany format archiwum!", MessageBox.TYPE_ERROR)
+        if finish: finish()
+        return
 
     tmpdir()
     tmp_archive_path = os.path.join(PLUGIN_TMP_PATH, os.path.basename(url))
+    
     cmd_chain = []
+    
     if "picon" not in title.lower():
-        cmd_chain.append("tar -czf /tmp/MyUpdater/backup_$(date +%Y%m%d_%H%M%S).tar.gz -C /etc/enigma2 lamedb *.tv *.radio 2>/dev/null || true")
-    cmd_chain.append('wget --no-check-certificate --timeout=30 -t 2 -O "{}" "{}"'.format(tmp_archive_path, url))
+        backup_cmd = "tar -czf /tmp/MyUpdater/backup_$(date +%Y%m%d_%H%M%S).tar.gz -C /etc/enigma2 lamedb *.tv *.radio 2>/dev/null || true"
+        cmd_chain.append(backup_cmd)
+
+    download_cmd = 'wget --no-check-certificate --timeout=30 -t 2 -O "{}" "{}"'.format(tmp_archive_path, url)
+    cmd_chain.append(download_cmd)
+    
     callback = finish
     
     if "picon" in title.lower() and archive_type == "zip":
-        picon_path = "/usr/share/enigma2/picon"; tmp_extract_path = "/tmp/MyUpdater_picon_extract"
+        picon_path = "/usr/share/enigma2/picon"
+        tmp_extract_path = "/tmp/MyUpdater_picon_extract"
+        
         cmd_chain.extend([
-            "rm -rf " + tmp_extract_path, "mkdir -p " + tmp_extract_path,
+            "rm -rf " + tmp_extract_path,
+            "mkdir -p " + tmp_extract_path,
             "unzip -o -q \"" + tmp_archive_path + "\" -d \"" + tmp_extract_path + "\"",
             "mkdir -p " + picon_path,
-            ("if [ -d \"" + tmp_extract_path + "/picon\" ]; then mv -f \"" + tmp_extract_path + "/picon\"/* \"" + picon_path + "/\" 2>/dev/null || true; "
-             "else mv -f \"" + tmp_extract_path + "\"/* \"" + picon_path + "/\" 2>/dev/null || true; fi"),
-            "rm -rf " + tmp_extract_path, "rm -f \"" + tmp_archive_path + "\"",
-            "echo '>>> Picony zainstalowane.' && sleep 0.5"
+            ("if [ -d \"" + tmp_extract_path + "/picon\" ]; then "
+             "mv -f \"" + tmp_extract_path + "/picon\"/* \"" + picon_path + "/\" 2>/dev/null || true; "
+             "else "
+             "mv -f \"" + tmp_extract_path + "\"/* \"" + picon_path + "/\" 2>/dev/null || true; "
+             "fi"),
+            "rm -rf " + tmp_extract_path,
+            "rm -f \"" + tmp_archive_path + "\"",
+            # Zmniejszono sleep do 0.5s
+            "echo '>>> Picony zostały pomyślnie zainstalowane.' && sleep 0.5"
         ])
-    else: # Listy kanałów
+    
+    else: # Logika dla list kanałów
         install_script_path = os.path.join(PLUGIN_PATH, "install_archive_script.sh")
         if not os.path.exists(install_script_path):
-             msg(session, "BŁĄD: Brak install_archive_script.sh!", MessageBox.TYPE_ERROR); return
-        cmd_chain.extend(["chmod +x \"{}\"".format(install_script_path), "bash {} \"{}\" \"{}\"".format(install_script_path, tmp_archive_path, archive_type)])
+             msg(session, "BŁĄD: Brak pliku install_archive_script.sh!", MessageBox.TYPE_ERROR)
+             if finish:
+                 try: finish()
+                 except: pass
+             return
+        
+        cmd_chain.extend([
+            "chmod +x \"{}\"".format(install_script_path),
+            "bash {} \"{}\" \"{}\"".format(install_script_path, tmp_archive_path, archive_type)
+        ])
+        
         def combined_callback():
             reload_settings_python(session)
             if finish: reactor.callLater(0.3, finish)
+        
         callback = combined_callback
     
     full_command = " && ".join(filter(None, cmd_chain))
     console(session, title, [full_command], onClose=callback, autoClose=True)
 
 def install_oscam_enhanced(session, finish=None):
+    """Inteligentna instalacja oscam z wieloma fallback"""
     distro = detect_distribution()
+    
     def install_callback():
-        msg(session, "Instalacja Oscam zakończona (lub próba). Sprawdź logi.", timeout=4)
-        if finish: try: finish() catch: pass
+        msg(session, "Instalacja Oscam zakończona (lub próba zakończona). Sprawdź logi.", timeout=4)
+        if finish:
+            try: finish()
+            except: pass
+
     commands = ["echo '>>> Aktualizacja feed...' && opkg update"]
-    # ... (reszta logiki instalacji oscam bez zmian) ...
     if distro == "openpli":
         commands.append("echo '>>> Szukanie oscam w feed (OpenPLI)...' && {} install enigma2-plugin-softcams-oscam 2>/dev/null || echo 'Nie znaleziono w feed'".format(get_opkg_command()))
         commands.append("echo '>>> Próba instalacji alternatywnego źródła...' && wget -q --no-check-certificate https://raw.githubusercontent.com/levi-45/Levi45Emulator/main/installer.sh -O /tmp/oscam_installer.sh && chmod +x /tmp/oscam_installer.sh && /bin/sh /tmp/oscam_installer.sh")
     else:
         commands.append("echo '>>> Szukanie oscam w feed...' && PKG=$(opkg list | grep 'oscam.*ipv4only' | grep -E -m1 'master|emu|stable' | cut -d' ' -f1) && if [ -n \"$PKG\" ]; then echo 'Znaleziono pakiet: $PKG' && {} install $PKG; else echo 'Nie znaleziono w feed, używam alternatywnego źródła...' && wget -q --no-check-certificate https://raw.githubusercontent.com/levi-45/Levi45Emulator/main/installer.sh -O /tmp/oscam_installer.sh && chmod +x /tmp/oscam_installer.sh && /bin/sh /tmp/oscam_installer.sh; fi".format(get_opkg_command()))
-    commands.append("echo '>>> Weryfikacja instalacji...' && if [ -f /usr/bin/oscam ] || [ -f /usr/bin/oscam-emu ]; then echo 'Oscam OK!'; else echo 'Uwaga: Brak pliku oscam'; fi")
+    commands.append("echo '>>> Weryfikacja instalacji...' && if [ -f /usr/bin/oscam ] || [ -f /usr/bin/oscam-emu ]; then echo 'Oscam został pomyślnie zainstalowany!'; else echo 'Uwaga: Plik oscam nie został znaleziony, sprawdź logi'; fi")
     console(session, "Instalacja Oscam", commands, onClose=install_callback, autoClose=True)
 
-#
-# === FUNKCJE POBIERANIA LIST (BEZ ZMIAN W LOGICE, TYLKO TIMEOUT) ===
-#
 def get_repo_lists():
     url = "https://raw.githubusercontent.com/OliOli2013/PanelAIO-Lists/main/manifest.json"
     tmp = os.path.join(PLUGIN_TMP_PATH, "manifest.json")
     lst = []
     try:
-        subprocess.check_output(["wget", "--no-check-certificate", "-q", "-T", "10", "-O", tmp, url], stderr=subprocess.STDOUT)
+        subprocess.check_output(["wget", "--no-check-certificate", "-q", "-T", "20", "-O", tmp, url], stderr=subprocess.STDOUT)
         with io.open(tmp, 'r', encoding='utf-8') as f: data = json.load(f)
         for i in data:
             if i.get('url'): lst.append(("{} - {} ({})".format(i.get('name',''), i.get('author',''), i.get('version','')), "archive:{}".format(i['url'])))
-    except subprocess.CalledProcessError as e: log("Błąd subprocess (repo lists): " + e.output.decode('utf-8', errors='ignore'))
+    except subprocess.CalledProcessError as e: log("Błąd subprocess przy pobieraniu repo lists: " + e.output.decode('utf-8', errors='ignore'))
     except Exception as e: log("Błąd pobierania repo lists: " + str(e))
-    if fileExists(tmp): try: os.remove(tmp); except: pass
     return lst
 
 def get_s4a_lists():
@@ -151,7 +185,7 @@ def get_s4a_lists():
     tmp = os.path.join(PLUGIN_TMP_PATH, "s4aupdater_list.txt")
     lst = []
     try:
-        subprocess.check_output(["wget", "--no-check-certificate", "-q", "-T", "10", "-O", tmp, url], stderr=subprocess.STDOUT)
+        subprocess.check_output(["wget", "--no-check-certificate", "-q", "-T", "20", "-O", tmp, url], stderr=subprocess.STDOUT)
         urls, vers = {}, {}
         with io.open(tmp, 'r', encoding='utf-8', errors='ignore') as f:
             for l in f:
@@ -162,14 +196,12 @@ def get_s4a_lists():
             name = k.replace('_url', '').replace('_', ' ').title()
             ver = vers.get(k.replace('_url', '_version'), "brak daty")
             lst.append(("{} - {}".format(name, ver), "archive:{}".format(u)))
-    except subprocess.CalledProcessError as e: log("Błąd subprocess (s4a lists): " + e.output.decode('utf-8', errors='ignore'))
+    except subprocess.CalledProcessError as e: log("Błąd subprocess przy pobieraniu s4a lists: " + e.output.decode('utf-8', errors='ignore'))
     except Exception as e: log("Błąd pobierania s4a lists: " + str(e))
-    if fileExists(tmp): try: os.remove(tmp); except: pass
     return [i for i in lst if not any(x in i[0].lower() for x in ['bzyk', 'jakitaki'])]
-# === KONIEC FUNKCJI POBIERANIA LIST ===
 
 class MyUpdaterEnhanced(Screen):
-    skin = """<screen position="center,center" size="720,450" title="MyUpdater Enhanced V5">
+    skin = """<screen position="center,center" size="720,450" title="MyUpdater Enhanced">
         <ePixmap pixmap="/usr/lib/enigma2/python/Plugins/Extensions/MyUpdater/logo.png" position="10,10" size="350,50" alphatest="on" />
         <widget name="menu" position="10,70" size="700,330" scrollbarMode="showOnDemand" />
         <widget name="info" position="10,410" size="700,30" font="Regular;20" halign="center" valign="center" foregroundColor="yellow" />
@@ -179,72 +211,39 @@ class MyUpdaterEnhanced(Screen):
     def __init__(self, session, args=0):
         Screen.__init__(self, session)
         self.session = session
-        self.setTitle("MyUpdater Enhanced V5")
+        self.setTitle("MyUpdater Enhanced V5") # Tytuł okna może być dłuższy
         self.distro = detect_distribution()
         
-        # === NOWE ZMIENNE ===
-        self.channel_lists = [] # Przechowuje pobrane listy
-        self.fetching_lists = False # Flaga informująca, czy trwa pobieranie
-        # === KONIEC NOWYCH ZMIENNYCH ===
-        
         self["menu"] = MenuList([
-            ("1. Listy kanałów", "menu_lists"), ("2. Instaluj Softcam", "menu_softcam"),
-            ("3. Pobierz Picony", "picons_github"), ("4. Aktualizacja Wtyczki", "plugin_update"),
-            ("5. Informacja", "plugin_info"), ("6. Diagnostyka", "system_diagnostic")
+            ("1. Listy kanałów", "menu_lists"),
+            ("2. Instaluj Softcam (Oscam/nCam)", "menu_softcam"),
+            ("3. Pobierz Picony Transparent", "picons_github"),
+            ("4. Aktualizacja Wtyczki", "plugin_update"),
+            ("5. Informacja o Wtyczce", "plugin_info"),
+            ("6. Diagnostyka Systemu", "system_diagnostic")
         ])
         
         self["info"] = Label("Wybierz opcję")
         self["version"] = Label("Wersja: " + VER)
         self["actions"] = ActionMap(["WizardActions", "DirectionActions"], {"ok": self.runMenuOption, "back": self.close}, -1)
         self["menu"].onSelectionChanged.append(self.updateInfoLabel)
-        
+        self.updateInfoLabel()
         tmpdir()
-        if fileExists(LOG_FILE): try: os.remove(LOG_FILE); except: pass
+        if fileExists(LOG_FILE):
+            try: os.remove(LOG_FILE)
+            except: pass
         log(u"MyUpdater Enhanced {} started on {}".format(VER, self.distro))
-        
-        # === URUCHOM POBIERANIE LIST W TLE ===
-        self.preloadChannelLists()
-        self.updateInfoLabel() # Ustaw początkowy opis
-
-    # === NOWA FUNKCJA - Preload list ===
-    def preloadChannelLists(self):
-        if not self.fetching_lists: # Zapobiegaj wielokrotnemu uruchomieniu
-             self.fetching_lists = True
-             self["info"].setText("Pobieram listy kanałów w tle...") # Informacja dla użytkownika
-             Thread(target=self._bgPreloadLists).start()
-
-    def _bgPreloadLists(self):
-        # Ta funkcja działa w tle
-        log("Preloading channel lists...")
-        repo = get_repo_lists()
-        s4a = get_s4a_lists()
-        all_lists = repo + s4a
-        log("Finished preloading {} lists.".format(len(all_lists)))
-        # Przekaż wynik z powrotem do głównego wątku
-        reactor.callFromThread(self._onPreloadFinished, all_lists)
-
-    def _onPreloadFinished(self, lst):
-        # Ta funkcja jest wywoływana po zakończeniu pobierania w tle
-        self.channel_lists = lst # Zapisz pobrane listy
-        self.fetching_lists = False # Zakończono pobieranie
-        self.updateInfoLabel() # Zaktualizuj etykietę (usunie "Pobieram...")
-        if not lst:
-             log("Preloading failed or no lists found.")
-             # Można dodać komunikat, ale może być irytujący przy starcie
-             # msg(self.session, "Nie udało się pobrać list kanałów w tle.", MessageBox.TYPE_WARNING, timeout=5)
-    # === KONIEC NOWYCH FUNKCJI ===
 
     def updateInfoLabel(self):
-        if self.fetching_lists:
-             # Jeśli nadal pobieramy listy, pokaż ten status
-             self["info"].setText("Pobieram listy kanałów w tle...")
-             return
         selection = self["menu"].getCurrent()
         key = selection[1] if selection else None
         descriptions = {
-            "menu_lists": "Pobierz i zainstaluj listy kanałów.", "menu_softcam": "Zainstaluj lub usuń Oscam/nCam.",
-            "picons_github": "Pobierz zestaw picon transparent.", "plugin_update": "Sprawdź i zainstaluj aktualizacje.",
-            "plugin_info": "Wyświetl informacje o tej wtyczce.", "system_diagnostic": "Sprawdź informacje o systemie."
+            "menu_lists": "Pobierz i zainstaluj listy kanałów.",
+            "menu_softcam": "Zainstaluj lub usuń Oscam/nCam.",
+            "picons_github": "Pobierz zestaw picon transparent.",
+            "plugin_update": "Sprawdź i zainstaluj aktualizacje wtyczki.",
+            "plugin_info": "Wyświetl informacje o tej wtyczce.",
+            "system_diagnostic": "Sprawdź podstawowe informacje o systemie."
         }
         self["info"].setText(descriptions.get(key, "Wybierz opcję i naciśnij OK"))
 
@@ -254,35 +253,44 @@ class MyUpdaterEnhanced(Screen):
         key = sel[1]
         log("Menu: " + key)
         self["info"].setText("Pracuję...")
+        # Zmniejszono opóźnienie do 0.05s
         reactor.callLater(0.05, self._delegateMenuOption, key)
 
     def _delegateMenuOption(self, key):
         action_map = {
-            "menu_lists": self.runChannelListMenu, "menu_softcam": self.runSoftcamMenu,
-            "picons_github": self.runPiconGitHub, "plugin_update": self.runPluginUpdate,
-            "plugin_info": self.runInfo, "system_diagnostic": self.runDiagnostic
+            "menu_lists": self.runChannelListMenu,
+            "menu_softcam": self.runSoftcamMenu,
+            "picons_github": self.runPiconGitHub,
+            "plugin_update": self.runPluginUpdate,
+            "plugin_info": self.runInfo,
+            "system_diagnostic": self.runDiagnostic
         }
         action = action_map.get(key)
-        if action: action()
+        if action:
+            action()
+            # Przywróć opis tylko jeśli akcja nie otwiera długotrwałego okna
+            if key in ["plugin_info"]:
+                 # Dla info, callback openWithCallback przywróci opis
+                 pass
+            elif key not in ["system_diagnostic"]: # Diagnostyka ma swój callback onClose
+                 # Dla innych akcji, które szybko wracają, można od razu, ale
+                 # operacje w tle (listy, update) i tak nadpiszą "Pracuję..."
+                 pass
+        else:
+             self.updateInfoLabel() # Jeśli nieznana akcja, przywróć opis
 
-    # === ZMIENIONA FUNKCJA - Używa pre-loadowanych list ===
     def runChannelListMenu(self):
-        if self.fetching_lists:
-             msg(self.session, "Listy kanałów są jeszcze pobierane w tle. Spróbuj za chwilę.", MessageBox.TYPE_INFO, timeout=4)
-             self.updateInfoLabel() # Przywróć status pobierania
-             return
-        if not self.channel_lists:
-             msg(self.session, "Brak dostępnych list kanałów lub wystąpił błąd podczas ich pobierania. Sprawdź logi.", MessageBox.TYPE_ERROR)
-             self.updateInfoLabel() # Przywróć opis
-             # Opcjonalnie: Spróbuj pobrać ponownie
-             # self.preloadChannelLists()
-             return
-        
-        # Listy są gotowe, pokaż je
-        self.session.openWithCallback(self.runChannelListSelected, ChoiceBox, title="Wybierz listę do instalacji", list=self.channel_lists, cancelCallback=self.updateInfoLabel)
-    # === KONIEC ZMIENIONEJ FUNKCJI ===
+        self["info"].setText("Pobieram listy...")
+        Thread(target=self._bgLists).start()
 
-    # Usunięto _bgLists i _onLists - nie są już potrzebne
+    def _bgLists(self):
+        repo = get_repo_lists(); s4a = get_s4a_lists()
+        reactor.callFromThread(self._onLists, repo + s4a)
+
+    def _onLists(self, lst):
+        self.updateInfoLabel()
+        if not lst: msg(self.session, "Błąd pobierania list. Sprawdź połączenie lub logi.", MessageBox.TYPE_ERROR); return
+        self.session.openWithCallback(self.runChannelListSelected, ChoiceBox, title="Wybierz listę do instalacji", list=lst, cancelCallback=self.updateInfoLabel)
 
     def runChannelListSelected(self, choice):
         if not choice: self.updateInfoLabel(); return
@@ -300,16 +308,20 @@ class MyUpdaterEnhanced(Screen):
         if not choice: self.updateInfoLabel(); return
         key, title = choice[1], choice[0]
         msg(self.session, "Rozpoczynam akcję: '{}'...".format(title), timeout=2)
-        def final_callback(message): msg(self.session, message, timeout=4); self.updateInfoLabel()
+        
+        def final_callback(message):
+            msg(self.session, message, timeout=4)
+            self.updateInfoLabel()
+
         action_map = {
             "oscam_auto": lambda: install_oscam_enhanced(self.session, finish=lambda: self.updateInfoLabel()),
             "oscam_levi45": lambda: console(self.session, title, ["wget -q --no-check-certificate https://raw.githubusercontent.com/levi-45/Levi45Emulator/main/installer.sh -O- | sh"], onClose=lambda: final_callback("Instalacja '{}' zakończona (lub próba).".format(title)), autoClose=True),
             "ncam_biko": lambda: console(self.session, title, ["wget -q https://raw.githubusercontent.com/biko-73/Ncam_EMU/main/installer.sh -O- | sh"], onClose=lambda: final_callback("Instalacja '{}' zakończona (lub próba).".format(title)), autoClose=True),
             "remove_softcam": lambda: console(self.session, "Usuwanie softcamów", ["echo '>>> Usuwanie...'", "opkg remove --force-removal-of-dependent-packages enigma2-plugin-softcams-* 2>/dev/null || true", "rm -f /usr/bin/oscam* /usr/bin/ncam* 2>/dev/null || true", "echo '>>> Zakończono.'"], onClose=lambda: final_callback("Softcamy usunięte (lub próba)."), autoClose=True)
         }
-        action = action_map.get(key);
+        action = action_map.get(key)
         if action: action()
-        else: self.updateInfoLabel()
+        else: self.updateInfoLabel() # Przywróć, jeśli nieznana akcja
 
     def runPiconGitHub(self):
         url = "https://github.com/OliOli2013/PanelAIO-Plugin/raw/main/Picony.zip"
@@ -329,16 +341,18 @@ class MyUpdaterEnhanced(Screen):
         try:
             subprocess.check_output(["wget", "--no-check-certificate", "-q", "-T", "10", "-O", tmp_ver, ver_url], stderr=subprocess.STDOUT)
             with io.open(tmp_ver, 'r', encoding='utf-8') as f: online = f.read().strip()
-        except subprocess.CalledProcessError as e: log("Błąd subprocess (update check): " + e.output.decode('utf-8', errors='ignore'))
+        except subprocess.CalledProcessError as e: log("Błąd subprocess przy sprawdzaniu wersji: " + e.output.decode('utf-8', errors='ignore'))
         except Exception as e: log("Błąd sprawdzania wersji: " + str(e))
-        if fileExists(tmp_ver): try: os.remove(tmp_ver); except: pass
+        if fileExists(tmp_ver):
+            try: os.remove(tmp_ver)
+            except: pass
         reactor.callFromThread(self._onUpdate, online, inst_url)
 
     def _onUpdate(self, online, inst_url):
         self.updateInfoLabel()
-        if not online: msg(self.session, "Nie udało się sprawdzić wersji. Sprawdź logi.", MessageBox.TYPE_ERROR); return
+        if not online: msg(self.session, "Nie udało się sprawdzić wersji. Sprawdź połączenie lub logi.", MessageBox.TYPE_ERROR); return
         if online and online != VER and online.strip():
-            txt = "Nowa wersja: {}\nTwoja: {}\nZaktualizować?".format(online, VER)
+            txt = "Dostępna nowa wersja: {}\nTwoja: {}\nZaktualizować?".format(online, VER)
             self.session.openWithCallback(lambda ans: self._doUpdate(inst_url) if ans else self.updateInfoLabel(), MessageBox, txt, type=MessageBox.TYPE_YESNO, title="Aktualizacja")
         else: msg(self.session, "Używasz najnowszej wersji ({}).".format(VER), MessageBox.TYPE_INFO)
 
@@ -348,8 +362,8 @@ class MyUpdaterEnhanced(Screen):
 
     def runInfo(self):
         txt = (u"MyUpdater Enhanced {}\n\n"
-               u"Kompatybilność: OpenATV/OpenPLI/ViX\n"
-               u"Autorzy: Paweł Pawełek (bazując na 3.11 Sancho)\n\n"
+               u"Kompatybilność: OpenATV 6.4-7.6, OpenPLI, ViX\n"
+               u"Autorzy: Paweł Pawełek, przebudowa na bazie 3.11 Sancho\n\n"
                u"System: {}\n"
                u"Komenda opkg: {}").format(VER, self.distro, get_opkg_command())
         self.session.openWithCallback(lambda *args: self.updateInfoLabel(), MessageBox, txt, MessageBox.TYPE_INFO)
@@ -362,8 +376,8 @@ class MyUpdaterEnhanced(Screen):
             "echo \"\"", "echo \"Dostępne softcamy (max 3):\"",
             "opkg list | grep -i 'oscam\|ncam' | head -3 2>/dev/null || echo \" - Brak softcamów w feed\"",
             "echo \"\"", "echo \"Przestrzeń dyskowa (/):\"", "df -h / | tail -1", "echo \"\"",
-            "ping -c 1 8.8.8.8 >/dev/null && echo \"Internet: OK\" || echo \"Internet: BRAK\"",
-            "echo \"\"", "echo '=== Koniec ==='", "echo 'Naciśnij EXIT...' "
+            "ping -c 1 8.8.8.8 >/dev/null && echo \"Połączenie internetowe: OK\" || echo \"Połączenie internetowe: BRAK\"",
+            "echo \"\"", "echo '=== Koniec diagnostyki ==='", "echo 'Naciśnij EXIT aby zamknąć...' "
         ]
         console(self.session, "Diagnostyka Systemu", commands, onClose=self.updateInfoLabel, autoClose=False)
 
