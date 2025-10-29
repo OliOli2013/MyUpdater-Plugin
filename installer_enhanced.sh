@@ -1,11 +1,13 @@
 #!/bin/sh
-# Instalator/aktualizator MyUpdater Enhanced V5
+# Instalator/aktualizator MyUpdater Enhanced V5 - POPRAWIONY
 # Kompletna przebudowa z pełną kompatybilnością OpenATV/OpenPLI
 
 # --- Konfiguracja ---
 PLUGIN_DIR="/usr/lib/enigma2/python/Plugins/Extensions/MyUpdater"
 GITHUB_RAW_URL="https://raw.githubusercontent.com/OliOli2013/MyUpdater-Plugin/main/usr/lib/enigma2/python/Plugins/Extensions/MyUpdater"
-REQUIRED_PKGS="wget curl tar unzip bash python-json python-core"
+
+# ZMINA: Tylko podstawowe narzędzia systemowe - bez wymagań Python
+REQUIRED_PKGS="wget curl tar unzip bash"
 
 # Pliki do pobrania
 FILES_TO_DOWNLOAD="
@@ -60,47 +62,70 @@ echo ""
 echo ">>> Sprawdzanie zależności..."
 MISSING_PKGS=""
 
+# ZMINA: Sprawdzamy tylko narzędzia systemowe, nie pakiety Python
 for PKG in $REQUIRED_PKGS; do
-    if ! command -v $PKG >/dev/null 2>&1 && ! opkg list-installed | grep -q "^$PKG "; then
-        echo "  > Brak pakietu: $PKG"
+    if ! command -v $PKG >/dev/null 2>&1; then
+        echo "  > Brak narzędzia: $PKG"
         MISSING_PKGS="$MISSING_PKGS $PKG"
     else
         echo "  > OK: $PKG"
     fi
 done
 
+# ZMINA: Sprawdzamy też pakiety opkg opcjonalnie
+if command -v opkg >/dev/null 2>&1; then
+    for PKG in $REQUIRED_PKGS; do
+        if ! opkg list-installed | grep -q "^$PKG " 2>/dev/null; then
+            # Jeśli pakiet nie jest zainstalowany, ale komenda działa - OK
+            if command -v $PKG >/dev/null 2>&1; then
+                echo "  > OK: $PKG (jako komenda)"
+            else
+                echo "  > Brak pakietu: $PKG"
+                MISSING_PKGS="$MISSING_PKGS $PKG"
+            fi
+        else
+            echo "  > OK: $PKG (jako pakiet)"
+        fi
+    done
+fi
+
 if [ -n "$MISSING_PKGS" ]; then
     echo ""
     echo ">>> Próba instalacji brakujących pakietów:$MISSING_PKGS"
     log "Instalacja pakietów: $MISSING_PKGS"
     
-    echo "> Aktualizacja listy pakietów..."
-    opkg update >/dev/null 2>&1
-    
-    echo "> Instalowanie pakietów..."
-    opkg install $MISSING_PKGS >/dev/null 2>&1
-    
-    # Sprawdzenie czy się udało
-    RECHECK_MISSING=""
-    for PKG in $MISSING_PKGS; do
-        if ! command -v $PKG >/dev/null 2>&1 && ! opkg list-installed | grep -q "^$PKG " 2>/dev/null; then
-            RECHECK_MISSING="$RECHECK_MISSING $PKG"
+    # ZMINA: Tylko jeśli opkg jest dostępne
+    if command -v opkg >/dev/null 2>&1; then
+        echo "> Aktualizacja listy pakietów..."
+        opkg update >/dev/null 2>&1
+        
+        echo "> Instalowanie pakietów..."
+        opkg install $MISSING_PKGS >/dev/null 2>&1
+        
+        # Sprawdzenie czy się udało
+        RECHECK_MISSING=""
+        for PKG in $MISSING_PKGS; do
+            if ! command -v $PKG >/dev/null 2>&1 && ! opkg list-installed | grep -q "^$PKG " 2>/dev/null; then
+                RECHECK_MISSING="$RECHECK_MISSING $PKG"
+            fi
+        done
+        
+        if [ -n "$RECHECK_MISSING" ]; then
+            echo ""
+            echo "!!! UWAGA: Nie udało się zainstalować:$RECHECK_MISSING"
+            echo "!!! Ale prawdopodobnie wtyczka i tak będzie działać."
+            echo "!!! Python jest już wbudowany w Enigma2."
+            log "Uwaga: Problemy z pakietami: $RECHECK_MISSING"
+        else
+            echo "> Wszystkie wymagane pakiety zostały zainstalowane."
+            log "Pakiety zainstalowane pomyślnie"
         fi
-    done
-    
-    if [ -n "$RECHECK_MISSING" ]; then
-        echo ""
-        echo "!!! BŁĄD: Nie udało się zainstalować:$RECHECK_MISSING"
-        echo "!!! Instalacja przerwana. Spróbuj zainstalować je ręcznie."
-        log "Błąd instalacji pakietów: $RECHECK_MISSING"
-        echo "------------------------------------------"
-        exit 1
     else
-        echo "> Wszystkie wymagane pakiety zostały zainstalowane."
-        log "Pakiety zainstalowane pomyślnie"
+        echo "> System bez opkg - pomijam instalację pakietów"
+        echo "> Wtyczka powinna działać mimo to."
     fi
 else
-    echo "> Wszystkie wymagane pakiety są już zainstalowane."
+    echo "> Wszystkie wymagane narzędzia są już zainstalowane."
 fi
 
 # --- Tworzenie katalogu wtyczki ---
@@ -125,14 +150,27 @@ for FILE in $FILES_TO_DOWNLOAD; do
         TARGET_FILE="$FILE"
     fi
     
+    # ZMINA: Lepsze sprawdzanie błędów wget
     if wget -q --timeout=30 "$GITHUB_RAW_URL/$FILE" -O "$PLUGIN_DIR/$TARGET_FILE" 2>/dev/null; then
         echo "    ✓ Sukces"
         log "Pobrano: $FILE"
     else
-        echo "    ✗ BŁĄD"
-        log "Błąd pobierania: $FILE"
-        SUCCESS=false
-        FAILED_FILES="$FAILED_FILES $FILE"
+        echo "    ✗ Błąd pobierania"
+        # Próba z curl jako fallback
+        if command -v curl >/dev/null 2>&1; then
+            echo "  > Próba z curl..."
+            if curl -s --max-time 30 "$GITHUB_RAW_URL/$FILE" -o "$PLUGIN_DIR/$TARGET_FILE" 2>/dev/null; then
+                echo "    ✓ Sukces (curl)"
+                log "Pobrano: $FILE (curl)"
+            else
+                echo "    ✗ Błąd curl"
+                SUCCESS=false
+                FAILED_FILES="$FAILED_FILES $FILE"
+            fi
+        else
+            SUCCESS=false
+            FAILED_FILES="$FAILED_FILES $FILE"
+        fi
     fi
 done
 
@@ -172,6 +210,19 @@ if [ -n "$MISSING_FILES" ]; then
     log "Brakujące pliki: $MISSING_FILES"
     echo "------------------------------------------"
     exit 1
+fi
+
+# --- Sprawdzenie Pythona (opcjonalne) ---
+echo ""
+echo ">>> Sprawdzanie Pythona...\""
+if python -c \"import json\" 2>/dev/null; then
+    echo \"  ✓ Moduł json działa\"
+elif python2 -c \"import json\" 2>/dev/null; then
+    echo \"  ✓ Python2 z json działa\"
+elif python3 -c \"import json\" 2>/dev/null; then
+    echo \"  ✓ Python3 z json działa\"
+else
+    echo \"  ⚠ Nie można przetestować json, ale wtyczka powinna działać\"
 fi
 
 # --- Informacja o zakończeniu ---
