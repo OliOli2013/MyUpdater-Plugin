@@ -399,7 +399,7 @@ class MyUpdaterEnhanced(Screen):
     def runInfo(self):
         txt = (u"MyUpdater Enhanced {}\n\n"
                u"Kompatybilność: OpenATV 6.4-7.6, OpenPLI, ViX\n"
-               u"Autorzy: Sancho, gut, Paweł Pawełek\n"
+               u"Autorzy:  Paweł Pawełek\n"
                u"Przebudowa: Kompletna wersja enhanced\n\n"
                u"System: {}\n"
                u"Komenda opkg: {}").format(VER, self.distro, get_opkg_command())
