@@ -85,9 +85,6 @@ def reload_settings_python(session, *args):
         log("[MyUpdater] Błąd podczas przeładowywania list: " + str(e))
         msg(session, "Wystąpił błąd podczas przeładowywania list.", MessageBox.TYPE_ERROR)
 
-#
-# *** FUNKCJA POPRAWIONA (OSTATECZNA LOGIKA INSTALACJI) ***
-#
 def install_archive_enhanced(session, title, url, finish=None):
     """Poprawiona wersja instalacji archiwum"""
     log("install_archive_enhanced: " + url)
@@ -410,22 +407,31 @@ class MyUpdaterEnhanced(Screen):
                u"Komenda opkg: {}").format(VER, self.distro, get_opkg_command())
         self.session.open(MessageBox, txt, MessageBox.TYPE_INFO)
 
+    #
+    # *** FUNKCJA POPRAWIONA (DIAGNOSTYKA - CZYTELNE WYNIKI) ***
+    #
     def runDiagnostic(self):
         """Diagnostyka systemu"""
         commands = [
             "echo '=== Diagnostyka Systemu ==='",
-            "echo 'Data: $(date)'",
-            "echo 'System: {}'".format(self.distro),
-            "echo 'Wersja Enigma2: $(opkg list-installed | grep enigma2 | head -1)'",
-            "echo 'Dostępne softcamy (max 3): $(opkg list | grep -i oscam | head -3)'",
-            "echo 'Przestrzeń dyskowa: $(df -h / | tail -1)'",
-            "echo 'Połączenie internetowe: $(ping -c 1 8.8.8.8 >/dev/null && echo OK || echo BRAK)'",
+            "echo \"Data: $(date)\"",
+            "echo \"System: {}\"".format(self.distro),
+            "echo \"Wersja Enigma2: $(opkg list-installed | grep enigma2 | head -1 2>/dev/null || echo 'Nieznana')\"",
+            "echo \"\"", # Pusta linia
+            "echo \"Dostępne softcamy (max 3):\"",
+            "opkg list | grep -i 'oscam\|ncam' | head -3 2>/dev/null || echo \" - Brak softcamów w feed\"",
+            "echo \"\"", # Pusta linia
+            "echo \"Przestrzeń dyskowa (/):\"",
+            "df -h / | tail -1",
+            "echo \"\"", # Pusta linia
+            "ping -c 1 8.8.8.8 >/dev/null && echo \"Połączenie internetowe: OK\" || echo \"Połączenie internetowe: BRAK\"",
+            "echo \"\"", # Pusta linia
             "echo '=== Koniec diagnostyki ==='",
-            "echo ''",
             "echo 'Naciśnij EXIT aby zamknąć...' "
         ]
-        # Poprawka: autoClose=False, aby okno nie znikało
+        # autoClose=False jest poprawne, aby okno zostało
         console(self.session, "Diagnostyka Systemu", commands, onClose=lambda: None, autoClose=False)
+
 
 def main(session, **kwargs):
     session.open(MyUpdaterEnhanced)
