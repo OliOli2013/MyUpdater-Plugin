@@ -1,11 +1,13 @@
 #!/bin/sh
 # Instalator/aktualizator MyUpdater Enhanced V5
 # Kompletna przebudowa z pełną kompatybilnością OpenATV/OpenPLI
+# Poprawka: Usunięto zbędne zależności python-json/python-core
 
 # --- Konfiguracja ---
 PLUGIN_DIR="/usr/lib/enigma2/python/Plugins/Extensions/MyUpdater"
 GITHUB_RAW_URL="https://raw.githubusercontent.com/OliOli2013/MyUpdater-Plugin/main/usr/lib/enigma2/python/Plugins/Extensions/MyUpdater"
-REQUIRED_PKGS="wget curl tar unzip bash python-json python-core"
+# *** POPRAWKA: Usunięto python-json i python-core z listy ***
+REQUIRED_PKGS="wget curl tar unzip bash"
 
 # Pliki do pobrania
 FILES_TO_DOWNLOAD="
@@ -33,14 +35,6 @@ detect_distribution() {
     fi
 }
 
-get_opkg_command() {
-    if [ "$(detect_distribution)" = "openpli" ]; then
-        echo "opkg --force-overwrite --force-downgrade"
-    else
-        echo "opkg --force-overwrite"
-    fi
-}
-
 # --- Sprawdzenie uprawnień ---
 if [ "$(id -u)" -ne 0 ]; then
     echo "------------------------------------------"
@@ -60,14 +54,26 @@ echo ""
 echo ">>> Sprawdzanie zależności..."
 MISSING_PKGS=""
 
+# Sprawdź podstawowe narzędzia
 for PKG in $REQUIRED_PKGS; do
-    if ! command -v $PKG >/dev/null 2>&1 && ! opkg list-installed | grep -q "^$PKG "; then
+    if ! command -v $PKG >/dev/null 2>&1; then
         echo "  > Brak pakietu: $PKG"
         MISSING_PKGS="$MISSING_PKGS $PKG"
     else
         echo "  > OK: $PKG"
     fi
 done
+
+# *** NOWA POPRAWKA: Sprawdź tylko czy jest Python (2 lub 3) ***
+if command -v python3 >/dev/null 2>&1; then
+    echo "  > OK: python3"
+elif command -v python >/dev/null 2>&1; then
+    echo "  > OK: python"
+else
+    echo "  > Brak pakietu: python (lub python3)"
+    MISSING_PKGS="$MISSING_PKGS python" # Dodajemy tylko 'python' do próby instalacji
+fi
+
 
 if [ -n "$MISSING_PKGS" ]; then
     echo ""
@@ -78,29 +84,41 @@ if [ -n "$MISSING_PKGS" ]; then
     opkg update >/dev/null 2>&1
     
     echo "> Instalowanie pakietów..."
-    opkg install $MISSING_PKGS >/dev/null 2>&1
-    
-    # Sprawdzenie czy się udało
-    RECHECK_MISSING=""
+    # Spróbuj zainstalować, ignorując błędy dla 'python', bo może być już python3
     for PKG in $MISSING_PKGS; do
-        if ! command -v $PKG >/dev/null 2>&1 && ! opkg list-installed | grep -q "^$PKG " 2>/dev/null; then
+        echo "  > Instalacja $PKG..."
+        opkg install $PKG >/dev/null 2>&1 || echo "    ! Ostrzeżenie: Nie udało się zainstalować $PKG (może już istnieje alternatywa?)"
+    done
+    
+    # Sprawdzenie czy się udało (tylko podstawowe narzędzia)
+    RECHECK_MISSING=""
+    for PKG in $REQUIRED_PKGS; do # Sprawdzamy tylko wget, curl etc.
+        if ! command -v $PKG >/dev/null 2>&1; then
             RECHECK_MISSING="$RECHECK_MISSING $PKG"
         fi
     done
     
     if [ -n "$RECHECK_MISSING" ]; then
         echo ""
-        echo "!!! BŁĄD: Nie udało się zainstalować:$RECHECK_MISSING"
+        echo "!!! BŁĄD: Nie udało się zainstalować podstawowych narzędzi:$RECHECK_MISSING"
         echo "!!! Instalacja przerwana. Spróbuj zainstalować je ręcznie."
         log "Błąd instalacji pakietów: $RECHECK_MISSING"
         echo "------------------------------------------"
         exit 1
+    # Sprawdzenie Pythona osobno
+    elif ! command -v python3 >/dev/null 2>&1 && ! command -v python >/dev/null 2>&1; then
+         echo ""
+         echo "!!! BŁĄD: Nie znaleziono interpretera Python (python lub python3) po próbie instalacji."
+         echo "!!! Zainstaluj go ręcznie i spróbuj ponownie."
+         log "Błąd: Brak Pythona"
+         echo "------------------------------------------"
+         exit 1
     else
-        echo "> Wszystkie wymagane pakiety zostały zainstalowane."
-        log "Pakiety zainstalowane pomyślnie"
+        echo "> Podstawowe zależności wyglądają na zainstalowane."
+        log "Pakiety zainstalowane pomyślnie lub istniały"
     fi
 else
-    echo "> Wszystkie wymagane pakiety są już zainstalowane."
+    echo "> Wszystkie wymagane zależności są już zainstalowane."
 fi
 
 # --- Tworzenie katalogu wtyczki ---
@@ -127,7 +145,7 @@ for FILE in $FILES_TO_DOWNLOAD; do
     
     if wget -q --timeout=30 "$GITHUB_RAW_URL/$FILE" -O "$PLUGIN_DIR/$TARGET_FILE" 2>/dev/null; then
         echo "    ✓ Sukces"
-        log "Pobrano: $FILE"
+        log "Pobrano: $FILE jako $TARGET_FILE"
     else
         echo "    ✗ BŁĄD"
         log "Błąd pobierania: $FILE"
