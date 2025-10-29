@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 #  MyUpdater Enhanced V5 – Kompletna przebudowa z pełną kompatybilnością
+#  Plik na GitHub jako: plugin_enhanced.py
 from __future__ import print_function, absolute_import
 from enigma import eDVBDB
 from Screens.Screen import Screen
@@ -85,9 +86,10 @@ def reload_settings_python(session, *args):
         msg(session, "Wystąpił błąd podczas przeładowywania list.", MessageBox.TYPE_ERROR)
 
 #
-# *** FUNKCJA POPRAWIONA (INSTALACJA PICON) ***
+# *** FUNKCJA POPRAWIONA (INSTALACJA PICON - NOWA LOGIKA) ***
 #
 def install_archive_enhanced(session, title, url, finish=None):
+    """Poprawiona wersja instalacji archiwum"""
     log("install_archive_enhanced: " + url)
     
     if url.endswith(".zip"):
@@ -111,32 +113,39 @@ def install_archive_enhanced(session, title, url, finish=None):
     
     if "picon" in title.lower() and archive_type == "zip":
         picon_path = "/usr/share/enigma2/picon"
-        nested_picon_path = os.path.join(picon_path, "picon")
+        # *** NOWA, BEZPIECZNA LOGIKA INSTALACJI PICON ***
+        tmp_extract_path = "/tmp/MyUpdater_picon_extract" # Dedykowany katalog rozpakowania
         
-        # *** POPRAWKA LITERÓWKI PONIŻEJ (było "{\"/*" zamiast "\"{}\"/*") ***
-        full_command = (
-            "{} && " +
-            "{} && " +
-            "mkdir -p {} && " +
-            "unzip -o -q \"{}\" -d \"{}\" && " +
-            "if [ -d \"{}\" ]; then mv -f \"{}\"/* \"{}\"/; rmdir \"{}\"; fi && " +
-            "rm -f \"{}\" && " +
-            "echo '>>> Picony zostały pomyślnie zainstalowane.' && sleep 2"
-        ).format(
-            backup_cmd,
-            download_cmd,
-            picon_path,
-            tmp_archive_path,
-            picon_path,
-            nested_picon_path,
-            nested_picon_path, # Poprawiony argument
-            picon_path,
-            nested_picon_path,
-            tmp_archive_path
+        # 1. Pobierz, 2. Wyczyść stare tmp, 3. Utwórz nowe tmp, 4. Rozpakuj do tmp
+        part1 = backup_cmd + " && " + download_cmd
+        part2 = "rm -rf " + tmp_extract_path
+        part3 = "mkdir -p " + tmp_extract_path
+        part4 = "unzip -o -q \"" + tmp_archive_path + "\" -d \"" + tmp_extract_path + "\""
+        
+        # 5. Upewnij się, że docelowy folder /usr/share/enigma2/picon istnieje
+        part5 = "mkdir -p " + picon_path
+
+        # 6. Sprawdź, czy ZIP miał folder 'picon' w środku i przenieś
+        part6 = (
+            "if [ -d \"" + tmp_extract_path + "/picon\" ]; then "
+            "mv -f \"" + tmp_extract_path + "/picon\"/* \"" + picon_path + "/\" 2>/dev/null || true; " # Przenieś zawartość podfolderu
+            "else "
+            "mv -f \"" + tmp_extract_path + "\"/* \"" + picon_path + "/\" 2>/dev/null || true; " # Przenieś zawartość główną
+            "fi"
         )
+
+        # 7. Posprzątaj (katalog tymczasowy i pobrany .zip)
+        part7 = "rm -rf " + tmp_extract_path
+        part8 = "rm -f \"" + tmp_archive_path + "\""
+        part9 = "echo '>>> Picony zostały pomyślnie zainstalowane.' && sleep 2"
+
+        full_command = part1 + " && " + part2 + " && " + part3 + " && " + part4 + " && " + part5 + " && " + part6 + " && " + part7 + " && " + part8 + " && " + part9
+        
+        # autoClose=True jest poprawne, okno zamknie się samo po sukcesie
         console(session, title, [full_command], onClose=finish, autoClose=True)
     
     else:
+        # Ta część (dla list kanałów) pozostaje bez zmian
         install_script_path = os.path.join(PLUGIN_PATH, "install_archive_script.sh")
         
         if not os.path.exists(install_script_path):
@@ -170,22 +179,15 @@ def install_oscam_enhanced(session, finish=None):
         if finish:
             finish()
     
-    # Przygotuj komendy instalacji
     commands = []
-    
-    # 1. Aktualizacja feed
     commands.append("echo '>>> Aktualizacja feed...' && opkg update")
     
-    # 2. Instalacja z feed (zależnie od dystrybucji)
     if distro == "openpli":
-        # Dla OpenPLI użyj innego podejścia
         commands.append("echo '>>> Szukanie oscam w feed (OpenPLI)...' && {} install enigma2-plugin-softcams-oscam 2>/dev/null || echo 'Nie znaleziono w feed'".format(get_opkg_command()))
         commands.append("echo '>>> Próba instalacji alternatywnego źródła...' && wget -q --no-check-certificate https://raw.githubusercontent.com/levi-45/Levi45Emulator/main/installer.sh -O /tmp/oscam_installer.sh && chmod +x /tmp/oscam_installer.sh && /bin/sh /tmp/oscam_installer.sh")
     else:
-        # Dla OpenATV i innych
         commands.append("echo '>>> Szukanie oscam w feed...' && PKG=$(opkg list | grep 'oscam.*ipv4only' | grep -E -m1 'master|emu|stable' | cut -d' ' -f1) && if [ -n \"$PKG\" ]; then echo 'Znaleziono pakiet: $PKG' && {} install $PKG; else echo 'Nie znaleziono w feed, używam alternatywnego źródła...' && wget -q --no-check-certificate https://raw.githubusercontent.com/levi-45/Levi45Emulator/main/installer.sh -O /tmp/oscam_installer.sh && chmod +x /tmp/oscam_installer.sh && /bin/sh /tmp/oscam_installer.sh; fi".format(get_opkg_command()))
     
-    # 3. Weryfikacja instalacji
     commands.append("echo '>>> Weryfikacja instalacji...' && if [ -f /usr/bin/oscam ] || [ -f /usr/bin/oscam-emu ]; then echo 'Oscam został pomyślnie zainstalowany!'; else echo 'Uwaga: Plik oscam nie został znaleziony, sprawdź logi'; fi")
     
     console(session, "Instalacja Oscam", commands, onClose=install_callback, autoClose=True)
@@ -243,7 +245,6 @@ class MyUpdaterEnhanced(Screen):
         self.session = session
         self.setTitle("MyUpdater Enhanced")
         
-        # Sprawdź system
         self.distro = detect_distribution()
         
         self["menu"] = MenuList([
@@ -267,7 +268,6 @@ class MyUpdaterEnhanced(Screen):
         
         log(u"MyUpdater Enhanced {} started on {}".format(VER, self.distro))
         
-        # Wyświetl info o systemie
         if self.distro != "unknown":
             self["info"].setText("Wykryto system: {}".format(self.distro))
         else:
@@ -357,7 +357,6 @@ class MyUpdaterEnhanced(Screen):
             console(self.session, "Usuwanie softcamów", commands, onClose=lambda: msg(self.session, "Softcamy usunięte.", timeout=3), autoClose=True)
 
     def runPiconGitHub(self):
-        # *** POPRAWKA: Link bezpośredni do pliku .zip ***
         url = "https://github.com/OliOli2013/PanelAIO-Plugin/raw/main/Picony.zip"
         title = "Pobieranie Picon (Transparent)" 
         log("Picons: " + url)
@@ -372,7 +371,7 @@ class MyUpdaterEnhanced(Screen):
 
     def _bgUpdate(self):
         ver_url = "https://raw.githubusercontent.com/OliOli2013/MyUpdater-Plugin/main/version.txt"
-        inst_url = "https://raw.githubusercontent.com/OliOli2013/MyUpdater-Plugin/main/installer.sh"
+        inst_url = "https://raw.githubusercontent.com/OliOli2013/MyUpdater-Plugin/main/installer.sh" # Zgodnie z plikiem V5
         tmp_ver = os.path.join(PLUGIN_TMP_PATH, "version.txt")
         online = None
         try:
@@ -391,6 +390,7 @@ class MyUpdaterEnhanced(Screen):
             msg(self.session, "Nie udało się sprawdzić wersji. Sprawdź połączenie.", MessageBox.TYPE_ERROR)
             return
         
+        # Poprawka: Sprawdzanie wersji V5
         if online and not online.startswith(VER):
             txt = "Dostępna nowa wersja: {}\nTwoja: {}\nZaktualizować?".format(online, VER)
             self.session.openWithCallback(lambda ans: self._doUpdate(inst_url) if ans else None,
@@ -402,10 +402,8 @@ class MyUpdaterEnhanced(Screen):
         cmd = "wget -q -O - {} | /bin/sh".format(url)
         console(self.session, "Aktualizacja MyUpdater", [cmd], onClose=lambda: None, autoClose=True)
 
-    #
-    # *** FUNKCJA POPRAWIONA (INFORMACJE) ***
-    #
     def runInfo(self):
+        # Poprawione informacje
         txt = (u"MyUpdater Enhanced {}\n\n"
                u"Kompatybilność: OpenATV 6.4-7.6, OpenPLI, ViX\n"
                u"Autorzy: Paweł Pawełek, przebudowa na bazie 3.11 Sancho\n\n"
@@ -413,9 +411,6 @@ class MyUpdaterEnhanced(Screen):
                u"Komenda opkg: {}").format(VER, self.distro, get_opkg_command())
         self.session.open(MessageBox, txt, MessageBox.TYPE_INFO)
 
-    #
-    # *** FUNKCJA POPRAWIONA (DIAGNOSTYKA) ***
-    #
     def runDiagnostic(self):
         """Diagnostyka systemu"""
         commands = [
@@ -430,7 +425,7 @@ class MyUpdaterEnhanced(Screen):
             "echo ''",
             "echo 'Naciśnij EXIT aby zamknąć...' "
         ]
-        # POPRAWKA: autoClose=False, aby okno konsoli nie znikało
+        # Poprawka: autoClose=False, aby okno nie znikało
         console(self.session, "Diagnostyka Systemu", commands, onClose=lambda: None, autoClose=False)
 
 def main(session, **kwargs):
