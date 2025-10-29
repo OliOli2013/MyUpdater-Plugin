@@ -1,19 +1,18 @@
 # MyUpdater Enhanced V5
 
-## Kompletna przebudowa aplikacji Enigma 2 z pełną kompatybilnością OpenATV/OpenPLI
+## Kompletna przebudowa aplikacji Enigma 2 z pełną kompatybilnością OpenATV/OpenPLI inne Py2, Py3
 
 ### 🚀 Nowości w wersji V5 Enhanced
 
-- **Pełna kompatybilność** z OpenATV 6.4-7.6 oraz OpenPLI
+- **Pełna kompatybilność** z OpenATV 6.4-7.6 oraz OpenPLI i inne Enigma2
 - **Inteligentna instalacja oscam** z automatyczną detekcją systemu
 - **Ulepszona obsługa błędów** z przyjaznymi komunikatami
-- **Kopia zapasowa** przed instalacją list kanałów
 - **Diagnostyka systemu** przed instalacją
 - **Fallback na alternatywne źródła** gdy główne niedostępne
 
 ### 📋 Wymagania systemowe
 
-- Enigma2 (OpenATV, OpenPLI, ViX)
+- Enigma2 (OpenATV, OpenPLI, ViX inne)
 - Python 2/3
 - Dostęp do internetu
 - Minimum 50MB wolnego miejsca
@@ -25,7 +24,7 @@
 1. **Uruchom terminal na swoim dekoderze**
 2. **Wykonaj instalację:**
    ```bash
-   wget -q -O - https://raw.githubusercontent.com/OliOli2013/MyUpdater-Plugin/main/installer_enhanced.sh | sh
+   wget -q -O - https://raw.githubusercontent.com/OliOli2013/MyUpdater-Plugin/main/installer.sh | sh
    ```
 
 #### Metoda 2 - Instalacja ręczna
@@ -134,13 +133,6 @@ Możesz też ręcznie sprawdzić aktualizację w menu wtyczki.
 
 Wtyczka bazuje na oryginalnym MyUpdater autorstwa Sancho i gut.
 Przebudowa i ulepszenia: Paweł Pawełek
-
-### 🙏 Podziękowania
-
-- **Sancho i gut** - oryginalny pomysł i kod
-- **OliOli2013** - repozytorium PanelAIO
-- **Levi45** - alternatywne źródło oscam
-- **biko-73** - repozytorium nCam
 
 ---
 
