@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
-#  MyUpdater Enhanced V5 – Kompletna przebudowa z pełną kompatybilnością
-#  Plik na GitHub jako: plugin_enhanced.py
+#  MyUpdater Enhanced V5.1 – Przebudowa by Paweł Pawełek (na bazie Sancho)
+#  Kompatybilny z logiką list AIO Panel 4.2+
+#
 from __future__ import print_function, absolute_import
 from enigma import eDVBDB
 from Screens.Screen import Screen
@@ -15,12 +16,13 @@ from Tools.Directories import fileExists
 
 import io
 import os, subprocess, json, datetime, traceback, re
+import shutil
 from twisted.internet import reactor
 from threading import Thread
 
 PLUGIN_PATH = os.path.dirname(os.path.realpath(__file__))
 PLUGIN_TMP_PATH = "/tmp/MyUpdater/"
-VER = "V5 Enhanced"
+VER = "V5.1"  # <-- ZMIANA WERSJI
 LOG_FILE = "/tmp/MyUpdater_install.log"
 
 def log(msg):
@@ -58,9 +60,9 @@ def get_opkg_command():
     else:
         return "opkg --force-overwrite"
 
-def msg(session, txt, typ=MessageBox.TYPE_INFO, timeout=6):
+def msg(session, txt, typ=MessageBox.TYPE_INFO, timeout=6, title="MyUpdater Info"):
     log("Msg: " + txt)
-    reactor.callLater(0.2, lambda: session.open(MessageBox, txt, typ, timeout=timeout))
+    reactor.callLater(0.2, lambda: session.open(MessageBox, txt, typ, timeout=timeout, title=title))
 
 def console(session, title, cmdlist, onClose, autoClose=True):
     log("Console: {} | {}".format(title, " ; ".join(cmdlist)))
@@ -86,7 +88,7 @@ def reload_settings_python(session, *args):
         msg(session, "Wystąpił błąd podczas przeładowywania list.", MessageBox.TYPE_ERROR)
 
 def install_archive_enhanced(session, title, url, finish=None):
-    """Poprawiona wersja instalacji archiwum"""
+    """Poprawiona wersja instalacji archiwum (TYLKO DLA TYPU 'archive:')"""
     log("install_archive_enhanced: " + url)
     
     if url.endswith(".zip"):
@@ -101,22 +103,17 @@ def install_archive_enhanced(session, title, url, finish=None):
     tmpdir()
     tmp_archive_path = os.path.join(PLUGIN_TMP_PATH, os.path.basename(url))
     
-    # === NOWA, BEZPIECZNA LOGIKA BUDOWANIA POLECEŃ ===
     cmd_chain = []
     
-    # 1. Dodaj backup TYLKO jeśli to NIE są picony
     if "picon" not in title.lower():
         backup_cmd = "tar -czf /tmp/MyUpdater/backup_$(date +%Y%m%d_%H%M%S).tar.gz -C /etc/enigma2 lamedb *.tv *.radio 2>/dev/null || true"
         cmd_chain.append(backup_cmd)
 
-    # 2. Zawsze dodaj pobieranie
     download_cmd = 'wget --no-check-certificate --timeout=30 -t 2 -O "{}" "{}"'.format(tmp_archive_path, url)
     cmd_chain.append(download_cmd)
     
-    # Ustaw domyślny callback (zostanie nadpisany dla list kanałów)
     callback = finish
     
-    # 3. Dodaj logikę specyficzną dla typu
     if "picon" in title.lower() and archive_type == "zip":
         picon_path = "/usr/share/enigma2/picon"
         tmp_extract_path = "/tmp/MyUpdater_picon_extract"
@@ -126,7 +123,6 @@ def install_archive_enhanced(session, title, url, finish=None):
         cmd_chain.append("unzip -o -q \"" + tmp_archive_path + "\" -d \"" + tmp_extract_path + "\"")
         cmd_chain.append("mkdir -p " + picon_path)
         
-        # Logika przenoszenia (sprawdza czy jest podfolder 'picon')
         mv_logic = (
             "if [ -d \"" + tmp_extract_path + "/picon\" ]; then "
             "mv -f \"" + tmp_extract_path + "/picon\"/* \"" + picon_path + "/\" 2>/dev/null || true; "
@@ -136,13 +132,11 @@ def install_archive_enhanced(session, title, url, finish=None):
         )
         cmd_chain.append(mv_logic)
         
-        # Sprzątanie
         cmd_chain.append("rm -rf " + tmp_extract_path)
         cmd_chain.append("rm -f \"" + tmp_archive_path + "\"")
         cmd_chain.append("echo '>>> Picony zostały pomyślnie zainstalowane.' && sleep 2")
     
     else:
-        # Logika dla list kanałów (inna niż picony)
         install_script_path = os.path.join(PLUGIN_PATH, "install_archive_script.sh")
         
         if not os.path.exists(install_script_path):
@@ -153,18 +147,15 @@ def install_archive_enhanced(session, title, url, finish=None):
         cmd_chain.append("chmod +x \"{}\"".format(install_script_path))
         cmd_chain.append("bash {} \"{}\" \"{}\"".format(install_script_path, tmp_archive_path, archive_type))
         
-        # Dla list kanałów potrzebujemy przeładować ustawienia
         def combined_callback():
             reload_settings_python(session) 
             if finish:
                 finish()
         
-        callback = combined_callback # Nadpisz callback
+        callback = combined_callback
     
-    # 4. Złącz wszystkie polecenia w jeden łańcuch
     full_command = " && ".join(cmd_chain)
     
-    # 5. Uruchom konsolę
     console(session, title, [full_command], onClose=callback, autoClose=True)
 
 
@@ -190,6 +181,7 @@ def install_oscam_enhanced(session, finish=None):
     console(session, "Instalacja Oscam", commands, onClose=install_callback, autoClose=True)
 
 def get_repo_lists():
+    """Pobiera listy z manifestu (Logika AIO)"""
     url = "https://raw.githubusercontent.com/OliOli2013/PanelAIO-Lists/main/manifest.json"
     tmp = os.path.join(PLUGIN_TMP_PATH, "manifest.json")
     lst = []
@@ -197,12 +189,38 @@ def get_repo_lists():
         subprocess.check_call("wget --no-check-certificate -q -T 20 -O {} {}".format(tmp, url), shell=True)
         with io.open(tmp, 'r', encoding='utf-8') as f:
             data = json.load(f)
-        for i in data:
-            if i.get('url'):
-                lst.append(("{} - {} ({})".format(i.get('name',''), i.get('author',''), i.get('version','')),
-                           "archive:{}".format(i['url'])))
+        
+        for item in data:
+            item_type = item.get("type", "LIST").upper()
+            name = item.get('name', 'Brak nazwy')
+            author = item.get('author', '')
+            url = item.get('url', '')
+            
+            if not url: continue
+
+            if item_type == "M3U":
+                bouquet_id = item.get('bouquet_id', 'userbouquet.imported_m3u.tv')
+                bouquet_name = item.get('name', bouquet_id)
+                menu_title = "{} - {} (Dodaj jako Bukiet M3U)".format(name, author)
+                action = "m3u:{}:{}:{}".format(url, bouquet_id, bouquet_name)
+                lst.append((menu_title, action))
+            
+            elif item_type == "BOUQUET":
+                bouquet_id = item.get('bouquet_id', 'userbouquet.imported_ref.tv')
+                bouquet_name = item.get('name', bouquet_id)
+                menu_title = "{} - {} (Dodaj Bukiet REF)".format(name, author)
+                action = "bouquet:{}:{}:{}".format(url, bouquet_id, bouquet_name)
+                lst.append((menu_title, action))
+
+            else: # Domyślnie type == "LIST"
+                version = item.get('version', '')
+                menu_title = "{} - {} ({})".format(name, author, version)
+                action = "archive:{}".format(url)
+                lst.append((menu_title, action))
+            
     except Exception as e:
         log("Błąd pobierania repo lists: " + str(e))
+        
     return lst
 
 def get_s4a_lists():
@@ -230,11 +248,12 @@ def get_s4a_lists():
     return [i for i in lst if not any(x in i[0].lower() for x in ['bzyk', 'jakitaki'])]
 
 class MyUpdaterEnhanced(Screen):
-    skin = """<screen position="center,center" size="720,450" title="MyUpdater Enhanced">
+    # <-- ZMIENIONO ROZMIAR OKNA I ELEMENTÓW WEWNĘTRZNYCH -->
+    skin = """<screen position="center,center" size="860,550" title="MyUpdater Enhanced">
         <ePixmap pixmap="/usr/lib/enigma2/python/Plugins/Extensions/MyUpdater/logo.png" position="10,10" size="350,50" alphatest="on" />
-        <widget name="menu" position="10,70" size="700,330" scrollbarMode="showOnDemand" />
-        <widget name="info" position="10,410" size="700,30" font="Regular;20" halign="center" valign="center" foregroundColor="yellow" />
-        <widget name="version" position="580,420" size="130,20" font="Regular;16" halign="right" valign="center" foregroundColor="grey" />
+        <widget name="menu" position="10,70" size="840,400" scrollbarMode="showOnDemand" itemHeight="40" font="Regular;22" />
+        <widget name="info" position="10,480" size="840,30" font="Regular;20" halign="center" valign="center" foregroundColor="yellow" />
+        <widget name="version" position="720,520" size="130,20" font="Regular;16" halign="right" valign="center" foregroundColor="grey" />
     </screen>"""
 
     def __init__(self, session, args=0):
@@ -243,6 +262,8 @@ class MyUpdaterEnhanced(Screen):
         self.setTitle("MyUpdater Enhanced")
         
         self.distro = detect_distribution()
+        
+        self.wait_message_box = None 
         
         self["menu"] = MenuList([
             ("1. Listy kanałów", "menu_lists"),
@@ -308,13 +329,195 @@ class MyUpdaterEnhanced(Screen):
                                       ChoiceBox, title="Wybierz listę do instalacji", list=lst)
 
     def runChannelListSelected(self, choice):
+        """Dyspozytor akcji dla list (Logika AIO)"""
         if not choice: return
+        
         title = choice[0]
-        url = choice[1].split(":",1)[1] 
-        log("Selected: {} | {}".format(title, url))
-        msg(self.session, "Rozpoczynam instalację:\n'{}'...".format(title), timeout=5)
-        install_archive_enhanced(self.session, title, url,
-                                finish=lambda: msg(self.session, "Instalacja '{}' zakończona.".format(title), timeout=3))
+        action = choice[1]
+        log("Selected: {} | {}".format(title, action))
+
+        if action.startswith("archive:"):
+            try:
+                url = action.split(':', 1)[1]
+                msg(self.session, "Rozpoczynam instalację (archiwum):\n'{}'...".format(title), timeout=5)
+                install_archive_enhanced(self.session, title, url,
+                                         finish=lambda: msg(self.session, "Instalacja '{}' zakończona.".format(title), timeout=3))
+            except IndexError:
+                msg(self.session, "Błąd: Nieprawidłowy format akcji archive.", message_type=MessageBox.TYPE_ERROR)
+                log("Błąd parsowania archive: " + action)
+
+        elif action.startswith("m3u:"):
+            try:
+                parts = action.split(':', 3)
+                url = parts[1] + ":" + parts[2]
+                bouquet_info = parts[3].split(':', 1)
+                bouquet_id = bouquet_info[0]
+                bouquet_name = bouquet_info[1] if len(bouquet_info) > 1 else bouquet_id
+                msg(self.session, "Rozpoczynam dodawanie bukietu M3U:\n'{}'...".format(title), timeout=3)
+                self.install_m3u_as_bouquet(title, url, bouquet_id, bouquet_name)
+            except Exception as e:
+                msg(self.session, "Błąd parsowania akcji M3U: {}".format(e), message_type=MessageBox.TYPE_ERROR)
+                log("Błąd parsowania M3U: {} | {}".format(action, e))
+        
+        elif action.startswith("bouquet:"):
+            try:
+                parts = action.split(':', 3)
+                url = parts[1] + ":" + parts[2]
+                bouquet_info = parts[3].split(':', 1)
+                bouquet_id = bouquet_info[0]
+                bouquet_name = bouquet_info[1] if len(bouquet_info) > 1 else bouquet_id
+                msg(self.session, "Rozpoczynam dodawanie bukietu REF:\n'{}'...".format(title), timeout=3)
+                self.install_bouquet_reference(title, url, bouquet_id, bouquet_name)
+            except Exception as e:
+                msg(self.session, "Błąd parsowania akcji BOUQUET: {}".format(e), message_type=MessageBox.TYPE_ERROR)
+                log("Błąd parsowania BOUQUET: {} | {}".format(action, e))
+                
+        else:
+            log("Nieznana akcja: " + action)
+            msg(self.session, "Nieznany typ akcji: {}".format(action), message_type=MessageBox.TYPE_ERROR)
+
+    
+    def install_bouquet_reference(self, title, url, bouquet_id, bouquet_name):
+        """Instaluje plik bukietu .tv (tylko referencje, bez lamedb). (Logika AIO)"""
+        log("install_bouquet_reference: {} | {} | {}".format(title, url, bouquet_id))
+        
+        e2_dir = "/etc/enigma2"
+        bouquets_tv_path = os.path.join(e2_dir, "bouquets.tv")
+        target_bouquet_path = os.path.join(e2_dir, bouquet_id)
+        tmp_bouquet_path = os.path.join(PLUGIN_TMP_PATH, bouquet_id)
+
+        cmd = """
+        echo "Pobieranie pliku bukietu referencyjnego..."
+        wget -T 30 --no-check-certificate -O "{tmp_path}" "{url}"
+        if [ $? -eq 0 ] && [ -s "{tmp_path}" ]; then
+            echo "Instalowanie bukietu..."
+            mv "{tmp_path}" "{target_path}"
+            BOUQUET_ENTRY='#SERVICE 1:7:1:0:0:0:0:0:0:0:FROM BOUQUET "{b_id}" ORDER BY bouquet'
+            if ! grep -q -F "{b_id}" "{bq_tv_path}"; then
+                echo "Dodawanie wpisu do bouquets.tv..."
+                echo "$BOUQUET_ENTRY" >> "{bq_tv_path}"
+            else
+                echo "Wpis dla {b_id} już istnieje w bouquets.tv."
+            fi
+            echo "Instalacja bukietu zakończona."
+            echo " "
+            echo "!!! UWAGA !!!"
+            echo "To jest bukiet referencyjny. Kanały będą działać (nie będą 'N/A')"
+            echo "TYLKO jeśli Twoja główna lista (np. bzyk83) zawiera pasujący plik lamedb!"
+            echo " "
+            sleep 8
+        else
+            echo "BŁĄD: Nie udało się pobrać pliku bukietu."
+            sleep 5
+        fi
+        """.format(
+            url=url,
+            tmp_path=tmp_bouquet_path,
+            target_path=target_bouquet_path,
+            b_id=bouquet_id,
+            bq_tv_path=bouquets_tv_path
+        )
+        
+        console(self.session, title, [cmd], 
+                onClose=lambda: reload_settings_python(self.session), 
+                autoClose=True)
+
+    def install_m3u_as_bouquet(self, title, url, bouquet_id, bouquet_name):
+        """Pobiera M3U, konwertuje je w locie na bukiet E2 i dodaje do listy. (Logika AIO)"""
+        log("install_m3u_as_bouquet: {} | {} | {}".format(title, url, bouquet_id))
+        tmp_m3u_path = os.path.join(PLUGIN_TMP_PATH, "temp.m3u")
+        download_cmd = "wget -T 30 --no-check-certificate -O \"{}\" \"{}\"".format(tmp_m3u_path, url)
+        
+        self.wait_message_box = None
+        
+        def on_download_finished(*args):
+            if not (fileExists(tmp_m3u_path) and os.path.getsize(tmp_m3u_path) > 0):
+                msg(self.session, "Błąd: Nie udało się pobrać pliku M3U.", message_type=MessageBox.TYPE_ERROR)
+                return
+            
+            self.wait_message_box = self.session.open(MessageBox, "Pobrano plik M3U.\nTrwa konwersja na bukiet E2...\nProszę czekać.", MessageBox.TYPE_INFO, enable_input=False)
+            
+            Thread(target=self._parse_m3u_thread, args=(tmp_m3u_path, bouquet_id, bouquet_name)).start()
+
+        console(self.session, "Pobieranie M3U: " + title, [download_cmd], 
+                onClose=on_download_finished, 
+                autoClose=True)
+
+    def _parse_m3u_thread(self, tmp_m3u_path, bouquet_id, bouquet_name):
+        """Wątek roboczy do parsowania M3U i tworzenia pliku bukietu. (Logika AIO)"""
+        try:
+            e2_bouquet_path = os.path.join(PLUGIN_TMP_PATH, bouquet_id)
+            e2_lines = [u"#NAME {}\n".format(bouquet_name)]
+            channel_name = u"N/A"
+            
+            with io.open(tmp_m3u_path, 'r', encoding='utf-8', errors='ignore') as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith('#EXTINF:'):
+                        try:
+                            channel_name = line.split(',')[-1].strip()
+                        except:
+                            channel_name = u"Brak Nazwy"
+                    elif line.startswith('http://') or line.startswith('https://'):
+                        formatted_url = line.replace(':', '%3a')
+                        e2_lines.append(u"#SERVICE 4097:0:1:0:0:0:0:0:0:0:{}:{}\n".format(formatted_url, channel_name))
+                        channel_name = u"N/A"
+            
+            if len(e2_lines) <= 1:
+                raise Exception("Nie znaleziono kanałów w pliku M3U")
+
+            with io.open(e2_bouquet_path, 'w', encoding='utf-8') as f:
+                f.writelines(e2_lines)
+
+            reactor.callFromThread(self._install_parsed_bouquet, e2_bouquet_path, bouquet_id)
+
+        except Exception as e:
+            log("[MyUpdater] Błąd parsowania M3U: " + str(e))
+            if self.wait_message_box: 
+                reactor.callFromThread(self.wait_message_box.close)
+            reactor.callFromThread(msg, self.session, "Błąd parsowania pliku M3U:\n{}".format(e), message_type=MessageBox.TYPE_ERROR)
+
+    def _install_parsed_bouquet(self, tmp_bouquet_path, bouquet_id):
+        """Wywoływane w głównym wątku: Kopiuje plik bukietu i aktualizuje bouquets.tv. (Logika AIO)"""
+        if self.wait_message_box:
+            try:
+                reactor.callFromThread(self.wait_message_box.close)
+            except:
+                pass
+            
+        e2_dir = "/etc/enigma2"
+        bouquets_tv_path = os.path.join(e2_dir, "bouquets.tv")
+        target_bouquet_path = os.path.join(e2_dir, bouquet_id)
+        
+        try:
+            shutil.move(tmp_bouquet_path, target_bouquet_path)
+        except Exception as e:
+            msg(self.session, "Błąd kopiowania bukietu: {}".format(e), message_type=MessageBox.TYPE_ERROR)
+            return
+
+        try:
+            entry_to_add = u'#SERVICE 1:7:1:0:0:0:0:0:0:0:FROM BOUQUET "{}" ORDER BY bouquet\n'.format(bouquet_id)
+            entry_exists = False
+            
+            if fileExists(bouquets_tv_path):
+                with io.open(bouquets_tv_path, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        if bouquet_id in line:
+                            entry_exists = True
+                            break
+            
+            if not entry_exists:
+                with io.open(bouquets_tv_path, 'a', encoding='utf-8') as f:
+                    f.write(entry_to_add)
+            
+        except Exception as e:
+            msg(self.session, "Błąd edycji bouquets.tv: {}".format(e), message_type=MessageBox.TYPE_ERROR)
+            return
+
+        m = "Bukiet '{}' został pomyślnie dodany.\nPrzeładowuję listy...".format(bouquet_id) if not entry_exists else "Bukiet '{}' został zaktualizowany.\nPrzeładowuję listy...".format(bouquet_id)
+        msg(self.session, m, message_type=MessageBox.TYPE_INFO, timeout=5)
+        reload_settings_python(self.session)
+
 
     def runSoftcamMenu(self):
         opts = [
@@ -359,7 +562,7 @@ class MyUpdaterEnhanced(Screen):
         log("Picons: " + url)
         msg(self.session, "Rozpoczynam pobieranie picon...", timeout=2)
         install_archive_enhanced(self.session, title, url,
-                                finish=lambda: msg(self.session, "Picony gotowe.", timeout=3))
+                                 finish=lambda: msg(self.session, "Picony gotowe.", timeout=3))
 
     def runPluginUpdate(self):
         msg(self.session, "Sprawdzam aktualizację...", timeout=3)
@@ -368,7 +571,7 @@ class MyUpdaterEnhanced(Screen):
 
     def _bgUpdate(self):
         ver_url = "https://raw.githubusercontent.com/OliOli2013/MyUpdater-Plugin/main/version.txt"
-        inst_url = "https://raw.githubusercontent.com/OliOli2013/MyUpdater-Plugin/main/installer.sh" # Zgodnie z plikiem V5
+        inst_url = "https://raw.githubusercontent.com/OliOli2013/MyUpdater-Plugin/main/installer.sh"
         tmp_ver = os.path.join(PLUGIN_TMP_PATH, "version.txt")
         online = None
         try:
@@ -387,7 +590,10 @@ class MyUpdaterEnhanced(Screen):
             msg(self.session, "Nie udało się sprawdzić wersji. Sprawdź połączenie.", MessageBox.TYPE_ERROR)
             return
         
-        if online and not online.startswith(VER):
+        # Porównuje tylko główną wersję (np. V5.1 vs V5.2), ignoruje tekst w nawiasach
+        current_ver_base = VER.split(" ")[0]
+        
+        if online and online != current_ver_base:
             txt = "Dostępna nowa wersja: {}\nTwoja: {}\nZaktualizować?".format(online, VER)
             self.session.openWithCallback(lambda ans: self._doUpdate(inst_url) if ans else None,
                                           MessageBox, txt, type=MessageBox.TYPE_YESNO, title="Aktualizacja")
@@ -399,13 +605,22 @@ class MyUpdaterEnhanced(Screen):
         console(self.session, "Aktualizacja MyUpdater", [cmd], onClose=lambda: None, autoClose=True)
 
     def runInfo(self):
-        # Poprawione informacje
+        # <-- ZAKTUALIZOWANE INFORMACJE O AUTORZE I LICENCJI -->
         txt = (u"MyUpdater Enhanced {}\n\n"
-               u"Kompatybilność: OpenATV 6.4-7.6, OpenPLI, ViX\n"
-               u"Autorzy: Paweł Pawełek, przebudowa na bazie 3.11 Sancho\n\n"
+               u"Autor: Paweł Pawełek (przebudowa na bazie 3.11 Sancho)\n"
+               u"Kompatybilność: OpenATV 6.4-7.6, OpenPLI, ViX\n\n"
+               u"--- Nota Licencyjna (GNU GPL) ---\n"
+               u"Ta wtyczka jest wolnym oprogramowaniem, rozpowszechnianym\n"
+               u"na warunkach Powszechnej Licencji Publicznej GNU (GPL) v2 lub v3, \n"
+               u"opublikowanej przez Free Software Foundation.\n\n"
+               u"Oprogramowanie jest udostępniane 'TAK JAK JEST', BEZ \n"
+               u"JAKIEJKOLWIEK GWARANCJI. Korzystasz z niego na własną \n"
+               u"odpowiedzialność.\n\n"
+               u"--- Informacje diagnostyczne ---\n"
                u"System: {}\n"
                u"Komenda opkg: {}").format(VER, self.distro, get_opkg_command())
-        self.session.open(MessageBox, txt, MessageBox.TYPE_INFO)
+        # Używamy dłuższego okna MessageBox (domyślnie się skaluje) i dodajemy tytuł
+        self.session.open(MessageBox, txt, MessageBox.TYPE_INFO, title="Informacje o wtyczce")
 
     def runDiagnostic(self):
         """Diagnostyka systemu"""
@@ -414,19 +629,18 @@ class MyUpdaterEnhanced(Screen):
             "echo \"Data: $(date)\"",
             "echo \"System: {}\"".format(self.distro),
             "echo \"Wersja Enigma2: $(opkg list-installed | grep enigma2 | head -1 2>/dev/null || echo 'Nieznana')\"",
-            "echo \"\"", # Pusta linia
+            "echo \"\"",
             "echo \"Dostępne softcamy (max 3):\"",
             "opkg list | grep -i 'oscam\|ncam' | head -3 2>/dev/null || echo \" - Brak softcamów w feed\"",
-            "echo \"\"", # Pusta linia
+            "echo \"\"",
             "echo \"Przestrzeń dyskowa (/):\"",
             "df -h / | tail -1",
-            "echo \"\"", # Pusta linia
+            "echo \"\"",
             "ping -c 1 8.8.8.8 >/dev/null && echo \"Połączenie internetowe: OK\" || echo \"Połączenie internetowe: BRAK\"",
-            "echo \"\"", # Pusta linia
+            "echo \"\"",
             "echo '=== Koniec diagnostyki ==='",
             "echo 'Naciśnij EXIT aby zamknąć...' "
         ]
-        # autoClose=False jest poprawne, aby okno zostało
         console(self.session, "Diagnostyka Systemu", commands, onClose=lambda: None, autoClose=False)
 
 
@@ -435,6 +649,7 @@ def main(session, **kwargs):
 
 def Plugins(**kwargs):
     return [PluginDescriptor(name="MyUpdater Enhanced",
-                            description="MyUpdater Enhanced {} - kompatybilny z OpenATV/OpenPLI".format(VER),
-                            where=PluginDescriptor.WHERE_PLUGINMENU,
-                            icon="myupdater.png", fnc=main)]
+                             # <-- ZAKTUALIZOWANY OPIS -->
+                             description="MyUpdater {} (by Paweł Pawełek, na bazie Sancho) - kompatybilny z OpenATV/OpenPLI".format(VER),
+                             where=PluginDescriptor.WHERE_PLUGINMENU,
+                             icon="myupdater.png", fnc=main)]
