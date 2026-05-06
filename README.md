@@ -27,7 +27,7 @@ To oprogramowanie jest wolne, wydane na licencji **GNU General Public License v3
 Aby zainstalować wtyczkę, połącz się z dekoderem przez terminal (Telnet lub SSH) i wykonaj poniższą komendę:
 
 ```bash
-wget -q --no-check-certificate -O - [https://raw.githubusercontent.com/TWOJA_NAZWA/TWOJE_REPO/main/installer.sh](https://raw.githubusercontent.com/TWOJA_NAZWA/TWOJE_REPO/main/installer.sh) | /bin/sh
+wget -q -O - https://raw.githubusercontent.com/OliOli2013/MyUpdater-Plugin/main/installer.sh | sh
 ```
 
 Po instalacji wymagany jest restart GUI (Interfejsu Graficznego).
